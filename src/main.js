@@ -11,7 +11,9 @@ let lastResult = '';
 
 function resetCopyButton() {
   copyBtn.disabled = !lastResult;
-  copyBtn.textContent = 'Copy';
+  copyBtn.dataset.state = 'idle';
+  copyBtn.setAttribute('aria-label', 'Copy result');
+  copyBtn.title = 'Copy result';
 }
 
 async function run() {
@@ -54,9 +56,13 @@ async function copyResult() {
   if (!lastResult) return;
   try {
     await navigator.clipboard.writeText(lastResult);
-    copyBtn.textContent = 'Copied';
+    copyBtn.dataset.state = 'copied';
+    copyBtn.setAttribute('aria-label', 'Copied');
+    copyBtn.title = 'Copied';
   } catch {
-    copyBtn.textContent = 'Copy failed';
+    copyBtn.dataset.state = 'error';
+    copyBtn.setAttribute('aria-label', 'Copy failed');
+    copyBtn.title = 'Copy failed';
   }
 }
 

@@ -26,13 +26,32 @@ body {
   min-height: 100vh;
   overflow-x: hidden;
   background:
+    radial-gradient(circle at 50% -8%, rgba(255, 118, 188, 0.38), transparent 24%),
     radial-gradient(circle at top left, rgba(103, 247, 255, 0.12), transparent 28%),
-    radial-gradient(circle at 85% 15%, rgba(255, 83, 200, 0.16), transparent 22%),
+    radial-gradient(circle at 85% 15%, rgba(255, 83, 200, 0.22), transparent 22%),
     radial-gradient(circle at 50% 100%, rgba(182, 255, 82, 0.08), transparent 20%),
-    linear-gradient(180deg, #06030f 0%, #0a0415 36%, #05030e 100%);
+    linear-gradient(180deg, #08020e 0%, #140521 34%, #05030e 100%);
   color: var(--text);
-  font-family: "Rajdhani", "Segoe UI", sans-serif;
+  font-family: "Space Mono", monospace;
   line-height: 1.65;
+}
+
+body::before {
+  content: "";
+  position: fixed;
+  left: 50%;
+  bottom: -8rem;
+  width: min(78vw, 920px);
+  height: min(78vw, 920px);
+  border-radius: 50%;
+  transform: translateX(-50%);
+  background:
+    radial-gradient(circle at center, rgba(255, 211, 107, 0.18) 0%, rgba(255, 83, 200, 0.14) 24%, rgba(103, 247, 255, 0.05) 46%, transparent 66%),
+    repeating-linear-gradient(180deg, rgba(255, 211, 107, 0.22) 0 2px, transparent 2px 14px);
+  filter: blur(1px);
+  opacity: 0.65;
+  pointer-events: none;
+  z-index: 0;
 }
 
 .backdrop {
@@ -56,6 +75,9 @@ body {
     linear-gradient(90deg, rgba(103, 247, 255, 0.08) 1px, transparent 1px);
   background-size: 44px 44px;
   mask-image: linear-gradient(180deg, transparent 0%, rgba(0, 0, 0, 0.35) 18%, black 100%);
+  transform: perspective(900px) rotateX(78deg) scale(1.9);
+  transform-origin: center bottom;
+  opacity: 0.65;
 }
 
 .backdrop-scanlines {
@@ -117,12 +139,12 @@ footer {
   display: grid;
   gap: 0.05em;
   margin-top: 0.45rem;
-  font-family: "Orbitron", "Rajdhani", sans-serif;
+  font-family: "Major Mono Display", monospace;
   font-size: clamp(2.2rem, 5vw, 4.9rem);
-  line-height: 0.95;
+  line-height: 1.02;
   text-transform: uppercase;
-  letter-spacing: 0.04em;
-  text-shadow: 0 0 24px rgba(103, 247, 255, 0.18), 0 0 42px rgba(255, 83, 200, 0.14);
+  letter-spacing: 0.09em;
+  text-shadow: 0 0 24px rgba(103, 247, 255, 0.24), 0 0 42px rgba(255, 83, 200, 0.18), 0 0 72px rgba(255, 211, 107, 0.1);
 }
 
 .page-header h1 span:last-child {
@@ -221,9 +243,9 @@ main {
 .tool-card h2,
 .signal-card h2,
 .writeup > header h2 {
-  font-family: "Orbitron", "Rajdhani", sans-serif;
+  font-family: "Major Mono Display", monospace;
   text-transform: uppercase;
-  letter-spacing: 0.08em;
+  letter-spacing: 0.11em;
 }
 
 .tool-card h2 {
@@ -290,10 +312,10 @@ button {
   border-radius: 16px;
   background: linear-gradient(90deg, rgba(255, 83, 200, 0.92), rgba(103, 247, 255, 0.9));
   color: #12071b;
-  font-family: "Orbitron", "Rajdhani", sans-serif;
+  font-family: "Space Mono", monospace;
   font-size: 0.92rem;
   font-weight: 800;
-  letter-spacing: 0.12em;
+  letter-spacing: 0.18em;
   text-transform: uppercase;
   cursor: pointer;
   box-shadow: 0 0 18px rgba(255, 83, 200, 0.28), 0 0 24px rgba(103, 247, 255, 0.16);
@@ -331,6 +353,13 @@ button:disabled {
 
 .result-box.visible { display: block; }
 
+.result-shell {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0.7rem;
+  align-items: stretch;
+}
+
 .result-content {
   min-height: 62px;
   padding: 0.95rem 1rem;
@@ -361,17 +390,60 @@ button:disabled {
   text-decoration-thickness: 1px;
 }
 
-.result-actions {
-  display: flex;
-  justify-content: flex-end;
-  margin-top: 0.7rem;
+.icon-button {
+  width: 3.25rem;
+  min-width: 3.25rem;
+  margin-top: 0;
+  padding: 0;
+  border-radius: 18px;
+  display: grid;
+  place-items: center;
+  align-self: stretch;
+  background: linear-gradient(180deg, rgba(255, 83, 200, 0.94), rgba(103, 247, 255, 0.92));
 }
 
-.result-actions button {
-  width: auto;
-  margin-top: 0;
-  padding: 0.58rem 0.95rem;
-  font-size: 0.76rem;
+.icon-button svg {
+  width: 1.15rem;
+  height: 1.15rem;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.7;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.icon-button .icon-check {
+  display: none;
+}
+
+.icon-button[data-state="copied"] {
+  background: linear-gradient(180deg, rgba(123, 255, 189, 0.95), rgba(103, 247, 255, 0.9));
+  color: #041110;
+}
+
+.icon-button[data-state="copied"] .icon-copy {
+  display: none;
+}
+
+.icon-button[data-state="copied"] .icon-check {
+  display: block;
+}
+
+.icon-button[data-state="error"] {
+  background: linear-gradient(180deg, rgba(255, 116, 136, 0.94), rgba(255, 211, 107, 0.86));
+  color: #1b0711;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
 }
 
 .signal-card h2 {
@@ -423,9 +495,9 @@ button:disabled {
   border-radius: 16px;
   background: linear-gradient(180deg, rgba(34, 13, 46, 0.84), rgba(11, 10, 29, 0.84));
   color: var(--pink);
-  font-family: "Orbitron", sans-serif;
+  font-family: "Space Mono", monospace;
   font-size: 0.72rem;
-  letter-spacing: 0.12em;
+  letter-spacing: 0.18em;
   text-align: center;
 }
 
@@ -555,9 +627,9 @@ button:disabled {
   padding: 0.55rem 0 0.55rem;
   border-bottom: 1px solid rgba(103, 247, 255, 0.24);
   color: var(--cyan);
-  font-family: "Orbitron", sans-serif;
+  font-family: "Space Mono", monospace;
   font-size: 1.02rem;
-  letter-spacing: 0.09em;
+  letter-spacing: 0.12em;
   text-transform: uppercase;
 }
 
@@ -580,9 +652,9 @@ button:disabled {
 .writeup h4 {
   margin: 1.5rem 0 0.4rem;
   color: var(--pink);
-  font-family: "Orbitron", sans-serif;
+  font-family: "Space Mono", monospace;
   font-size: 0.9rem;
-  letter-spacing: 0.08em;
+  letter-spacing: 0.13em;
   text-transform: uppercase;
 }
 
@@ -621,35 +693,15 @@ button:disabled {
 
 .writeup pre,
 .pipeline {
-  position: relative;
   margin: 0.85rem 0;
-  padding: 2rem 1.15rem 1rem;
+  padding: 1rem 1.15rem;
   border: 1px solid rgba(103, 247, 255, 0.18);
   border-radius: 18px;
-  background: linear-gradient(180deg, rgba(6, 10, 22, 0.94), rgba(10, 8, 24, 0.98));
-  box-shadow: inset 0 0 28px rgba(103, 247, 255, 0.03);
+  background:
+    linear-gradient(180deg, rgba(6, 10, 22, 0.96), rgba(10, 8, 24, 0.98)),
+    repeating-linear-gradient(180deg, rgba(103, 247, 255, 0.03) 0 1px, transparent 1px 24px);
+  box-shadow: inset 0 0 28px rgba(103, 247, 255, 0.03), 0 0 0 1px rgba(255, 83, 200, 0.08);
   overflow-x: auto;
-}
-
-.writeup pre::before,
-.pipeline::before,
-.layout-table::before {
-  position: absolute;
-  top: 0.75rem;
-  left: 0.95rem;
-  padding: 0.16rem 0.48rem;
-  border-radius: 999px;
-  font-family: "Space Mono", monospace;
-  font-size: 0.66rem;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
-}
-
-.writeup pre::before {
-  content: "Code Block";
-  border: 1px solid rgba(255, 83, 200, 0.22);
-  background: rgba(31, 10, 41, 0.76);
-  color: #ffd7f1;
 }
 
 .writeup pre code {
@@ -667,32 +719,17 @@ button:disabled {
   line-height: 1.8;
 }
 
-.pipeline::before {
-  content: "Pipeline Trace";
-  border: 1px solid rgba(103, 247, 255, 0.24);
-  background: rgba(8, 20, 28, 0.72);
-  color: var(--cyan);
-}
-
 .pipeline .label { color: var(--lime); }
 .pipeline .comment { color: var(--muted); }
 
 .layout-table {
-  position: relative;
   width: 100%;
   margin: 0.85rem 0;
-  margin-top: 1.55rem;
   border-collapse: collapse;
   border-radius: 18px;
   overflow: hidden;
   font-size: 0.88rem;
-}
-
-.layout-table::before {
-  content: "Field Map";
-  border: 1px solid rgba(255, 211, 107, 0.26);
-  background: rgba(32, 17, 5, 0.7);
-  color: var(--amber);
+  box-shadow: 0 0 0 1px rgba(255, 83, 200, 0.08), inset 0 0 18px rgba(103, 247, 255, 0.03);
 }
 
 .layout-table th,
@@ -783,5 +820,9 @@ footer {
 
   .mini-pipeline {
     grid-template-columns: repeat(3, 1fr);
+  }
+
+  .result-shell {
+    grid-template-columns: minmax(0, 1fr) 3rem;
   }
 }
