@@ -152,6 +152,8 @@ button:disabled { background: #374151; cursor: not-allowed; }
 .writeup p  { margin: 0.6rem 0; font-size: 0.9rem; color: #c9d1d9; }
 .writeup ul { margin: 0.5rem 0 0.5rem 1.5rem; font-size: 0.9rem; color: #c9d1d9; }
 .writeup li { margin: 0.25rem 0; }
+.writeup a  { color: #a78bfa; text-decoration: underline; }
+.writeup a:hover { color: #c4b5fd; }
 
 .writeup code {
   font-family: "JetBrains Mono", "Fira Code", monospace;

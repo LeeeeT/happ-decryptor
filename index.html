@@ -46,9 +46,9 @@
       <header>
         <h2>Reverse Engineering <code>happ://</code> — A Deep Dive</h2>
         <p>
-          How five generations of link encryption were analysed, from a trivial
-          RSA wrapper to a fully obfuscated native ARM64 library, and reimplemented
-          in pure Python and JavaScript.
+          How five generations of link encryption were analysed and reimplemented —
+          from a trivial RSA wrapper to a fully obfuscated native ARM64 library
+          guarding 33 different private keys.
         </p>
       </header>
 
@@ -58,214 +58,209 @@
         The <code>happ://</code> URI scheme is a custom deep-link protocol used
         by a mobile application to encode destination URLs as opaque, encrypted
         payloads. Instead of embedding a plain <code>https://</code> link that
-        anyone can read, the app generates a payload that is passed to the
-        installed application for decryption. Decryption happens on-device;
-        the server never sees the target URL.
+        can be read by anyone who intercepts or inspects the link, the app
+        generates a payload that only the installed application can decrypt.
+        Decryption happens entirely on-device; the server never sees the
+        destination URL in plaintext.
       </p>
       <p>
-        Over time the scheme evolved through five encryption generations —
+        The scheme evolved through five encryption generations —
         <code>crypt</code> through <code>crypt5</code> — each substantially
         harder to reverse-engineer than the previous one. This tool implements
         all five.
       </p>
 
       <!-- ── 2. crypt1–4 ── -->
-      <h3>Generations 1–4: RSA-PKCS1v15 in a Loop</h3>
+      <h3>Generations 1–4: Hardcoded RSA Keys</h3>
       <p>
-        The first four link types share the same conceptually simple structure.
-        The payload is a standard Base64-encoded RSA ciphertext split into
-        fixed-size blocks matching the key modulus:
+        The first four generations share the same conceptual structure.
+        A target URL is encrypted with RSA-PKCS1v15, split into fixed-size
+        blocks matching the key modulus, and the concatenated ciphertext is
+        Base64-encoded:
       </p>
       <pre><code>happ://crypt/&lt;base64( RSA_block₁ ‖ RSA_block₂ ‖ … )&gt;</code></pre>
 
       <table class="layout-table">
-        <thead><tr><th>Scheme</th><th>Key size</th><th>Block size</th><th>Algorithm</th></tr></thead>
+        <thead><tr><th>Scheme</th><th>Key size</th><th>Block size (bytes)</th><th>Algorithm</th></tr></thead>
         <tbody>
-          <tr><td>crypt</td><td>RSA-1024</td><td>128 B</td><td>PKCS1v15</td></tr>
-          <tr><td>crypt2</td><td>RSA-4096</td><td>512 B</td><td>PKCS1v15</td></tr>
-          <tr><td>crypt3</td><td>RSA-4096</td><td>512 B</td><td>PKCS1v15</td></tr>
-          <tr><td>crypt4</td><td>RSA-4096</td><td>512 B</td><td>PKCS1v15</td></tr>
+          <tr><td>crypt</td><td>RSA-1024</td><td>128</td><td>PKCS1v15</td></tr>
+          <tr><td>crypt2</td><td>RSA-4096</td><td>512</td><td>PKCS1v15</td></tr>
+          <tr><td>crypt3</td><td>RSA-4096</td><td>512</td><td>PKCS1v15</td></tr>
+          <tr><td>crypt4</td><td>RSA-4096</td><td>512</td><td>PKCS1v15</td></tr>
         </tbody>
       </table>
 
       <p>
-        Each block is decrypted independently with RSA-PKCS1v15 and the
-        plaintext fragments are concatenated to recover the target URL.
-        Longer URLs simply produce more blocks.
+        Decryption is symmetric: split the Base64 payload back into
+        128-byte (crypt) or 512-byte (crypt2–4) blocks, decrypt each block
+        independently with RSA-PKCS1v15, and concatenate the plaintext
+        fragments to recover the URL.
       </p>
       <p>
-        The four RSA private keys were found verbatim as Base64 string literals
-        in the application's compiled DEX bytecode — no key derivation, no
-        obfuscation, just hardcoded constants. Extracting them required only a
-        standard DEX disassembler.
+        Each of the four RSA private keys is stored verbatim as a Base64
+        string literal inside the application's compiled DEX bytecode — no
+        derivation, no obfuscation. The keys are used directly by the Java
+        runtime via the standard JCA API.
       </p>
 
       <!-- ── 3. crypt5 ── -->
-      <h3>Generation 5: The Native Library</h3>
+      <h3>Generation 5: The Obfuscated Native Library</h3>
       <p>
-        <code>crypt5</code> raises the bar significantly. Decryption is
-        delegated to an ARM64 native shared library
-        (<code>liberror-code.so</code>) loaded via JNI. The Java layer passes
-        in the payload as a byte array and receives back the decrypted URL.
-        All cryptographic logic — key selection, RSA, symmetric cipher — lives
-        inside compiled machine code with no symbol table and no plaintext
-        constants visible in the Java layer.
+        <code>crypt5</code> is a different beast. Decryption is delegated to
+        a stripped ARM64 native shared library loaded via JNI. The Java layer
+        passes the payload as a byte array and receives the decrypted URL back;
+        every cryptographic operation — including key storage, key selection,
+        and both the RSA and symmetric cipher — is hidden inside machine code
+        with no exported symbols, no readable string constants, and no
+        meaningful structure visible to a Java-layer observer.
       </p>
 
-      <h4>Step 1 — Reversing via CPU Emulation</h4>
+      <h4>Payload Obfuscation: The Block-Pair Swap</h4>
       <p>
-        Without access to a live ARM64 device running the app, the approach was
-        to use the <strong>Unicorn Engine</strong> — a lightweight,
-        multi-architecture CPU emulator built on QEMU — to execute the ARM64
-        machine code directly on an x86-64 host machine.
-        The emulator is initialised with:
+        Before any cryptography can happen, the payload must be decoded from
+        its wire format. All variable-length regions in a <code>crypt5</code>
+        payload are shuffled using a fixed permutation that we call the
+        <em>block-pair swap</em>. For output position <em>j</em> (1-indexed)
+        within a region:
       </p>
-      <ul>
-        <li>The library's ELF code and data segments memory-mapped at their
-          original virtual addresses.</li>
-        <li>A synthetic stack and heap, with the payload written into the
-          emulated address space.</li>
-        <li>JNI call sites replaced by trampoline hooks that transfer control
-          to Python handler functions.</li>
-        <li>A hook on the <code>python_get_help</code> JNI function, which the
-          library calls to obtain the RSA key material from the Java layer.</li>
-        <li>A hook on the internal RSA key-loading routine, which captures the
-          fully-expanded PKCS8 private key just before it is passed to the RSA
-          engine.</li>
-      </ul>
+      <pre><code>k      = (j − 1) ÷ 4
+p      = (j − 1) mod 4
+source = 4·k + (p + 2) mod 4</code></pre>
       <p>
-        This produced a working black-box decryptor in pure Python: any valid
-        <code>crypt5</code> payload in, the decrypted URL out, with no
-        physical device required.
+        The net effect is that every 4-character block is rotated left by two
+        positions — equivalently, the two 2-character pairs within each block
+        swap places: <code>AB CD → CD AB</code>. The transform is an involution
+        (its own inverse), so decoding and encoding are the same operation.
       </p>
 
-      <h4>Step 2 — Payload Format Discovery</h4>
+      <h4>Payload Structure</h4>
       <p>
-        With the emulator running and instrumented with memory-write hooks, we
-        performed differential analysis: flip one byte of the payload, observe
-        exactly which intermediate buffer bytes change, repeat for every
-        position. This technique mapped every byte of the payload to its
-        precise role:
+        The full wire format of a <code>crypt5</code> payload was recovered
+        through differential analysis: by systematically varying individual
+        bytes and observing which internal buffers changed, every field was
+        mapped to its precise offset and role.
       </p>
       <table class="layout-table">
         <thead>
           <tr><th>Offset</th><th>Length</th><th>Field</th></tr>
         </thead>
         <tbody>
-          <tr><td>0</td><td>4</td><td>Fixed prefix <code>"iaii"</code></td></tr>
-          <tr><td>4</td><td>12</td><td>Encoded nonce — three 4-char blocks, each pair-swapped</td></tr>
-          <tr><td>16</td><td>2</td><td>Marker; <code>payload[17]</code> = <code>url_b64[0]</code> (first char of the URL ciphertext)</td></tr>
-          <tr><td>18</td><td>2</td><td><em>N</em> as two ASCII decimal digits — encoded length of the URL ciphertext region</td></tr>
+          <tr><td>0</td><td>4</td><td>Fixed magic <code>"iaii"</code></td></tr>
+          <tr><td>4</td><td>12</td><td>Encoded nonce — three 4-char blocks, each block-pair-swapped</td></tr>
+          <tr><td>16</td><td>1</td><td>Separator; this character is also <code>url_b64[0]</code></td></tr>
+          <tr><td>17</td><td>2</td><td><em>N</em> — length of the encoded URL ciphertext region, as two ASCII digits</td></tr>
+          <tr><td>19</td><td>1</td><td>Additional separator byte</td></tr>
           <tr><td>20</td><td><em>N</em></td><td>Encoded URL ciphertext (ChaCha20-Poly1305 output, block-pair-swapped)</td></tr>
-          <tr><td>20+<em>N</em></td><td>684</td><td>Encoded RSA ciphertext (512 B ciphertext + separator, block-pair-swapped)</td></tr>
-          <tr><td>end−3+</td><td>≥3</td><td>Variable suffix (<code>"adi"</code>, <code>"cadi"</code>, <code>"lkadi"</code>, …)</td></tr>
+          <tr><td>20+<em>N</em></td><td>684</td><td>Encoded RSA ciphertext region (512-byte RSA block + delimiters, block-pair-swapped)</td></tr>
+          <tr><td>end</td><td>≥3</td><td>Variable suffix: <code>"adi"</code>, <code>"cadi"</code>, <code>"lkadi"</code>, …</td></tr>
         </tbody>
       </table>
-
-      <h4>The Block-Pair Swap Transform</h4>
       <p>
-        All encoded regions use the same obfuscation permutation. For output
-        position <em>j</em> (1-indexed) from a region of length <em>L</em>:
-      </p>
-      <pre><code>k      = (j − 1) ÷ 4
-p      = (j − 1) mod 4
-source = 4k + (p + 2) mod 4</code></pre>
-      <p>
-        The net effect is that each 4-character block is rotated by two
-        positions: <code>ABCD → CDAB</code>. Equivalently, the two
-        2-character pairs within every block are swapped. The transform is its
-        own inverse — applying it twice recovers the original string.
-      </p>
-      <p>
-        Nonce decoding uses the same pair-swap applied at the 2-character level
-        across three 4-char blocks:
+        Nonce extraction applies the pair-swap at the 2-character pair level
+        across three 4-character blocks of <code>payload[4:16]</code>:
       </p>
       <pre><code>n     = payload[4:16]
-nonce = n[2:4] + n[0:2] + n[6:8] + n[4:6] + n[10:12] + n[8:10]</code></pre>
-
-      <h4>Step 3 — Key Selection</h4>
+nonce = n[2:4] + n[0:2]  +  n[6:8] + n[4:6]  +  n[10:12] + n[8:10]</code></pre>
       <p>
-        The library contains 33 RSA-4096 private keys and selects one based on
-        a short <em>selector</em> string derived from a fixed 16-character
-        magic constant (<code>'ikdhaaoxaiilieih'</code>):
-      </p>
-      <pre><code>rev      = 'ikdhaaoxaiilieih'[::-1]           # → 'hieiliiaxoaahdki'
-selector = ''.join(rev[i+1] for i in range(0, len(rev), 2))  # → 'iiiaoadi'</code></pre>
-      <p>
-        The selector is matched against 33 condition tuples
-        <code>(starts, mid, ends)</code>:
-      </p>
-      <pre><code>selector.startswith(starts)   # first 2 chars
-selector[2:6] == mid          # middle 4 chars
-selector.endswith(ends)       # last 2 chars</code></pre>
-      <p>
-        The matching tuple identifies which pre-computed RSA key to use.
-        All 33 conditions are stored in <code>data/selectors.json</code>.
+        The RSA ciphertext region contains a non-trailing <code>'='</code>
+        character that acts as a delimiter; everything after it is the
+        Base64-encoded 512-byte RSA ciphertext.
       </p>
 
-      <h4>The Key Expansion Problem</h4>
+      <h4>Key Selection: 33 Keys, One Selector</h4>
       <p>
-        The <code>python_get_help</code> JNI call returns a 1,612-character
-        encoded key. The native library then internally expands this into a
-        3,168-character Base64-encoded PKCS8 DER private key before passing it
-        to the RSA engine. Reverse-engineering the proprietary expansion
-        algorithm inside the obfuscated native code would be time-consuming.
+        The native library embeds 33 distinct RSA-4096 private keys. To decide
+        which one to use for a given link, it evaluates a short
+        <em>selector</em> string derived from a fixed 16-character constant
+        baked into the library: <code>"ikdhaaoxaiilieih"</code>.
       </p>
       <p>
-        Instead, we took a simpler approach: run the emulator once per
-        condition, monkey-patching <code>python_get_help</code> to return each
-        condition's key in turn, and capture the fully-expanded PKCS8 key
-        exactly at the point it is consumed. This produced a complete 33-entry
-        pre-computed lookup table — the <code>data/expanded_rsa_keys.json</code>
-        file (~105 KB) embedded in this tool.
+        The derivation reverses the string, then picks every second character
+        starting from index 1:
+      </p>
+      <pre><code>reversed  = "ikdhaaoxaiilieih"[::-1]        → "hieiliiaxoaahdki"
+selector  = reversed[1] + reversed[3] + …   → "iiiaoadi"</code></pre>
+      <p>
+        The selector is then tested against 33 stored condition tuples
+        <code>(starts, mid, ends)</code> until one matches:
+      </p>
+      <pre><code>selector.startswith(starts)      # checks first 2 characters
+selector[2:6] == mid             # checks the middle 4 characters
+selector.endswith(ends)          # checks the last 2 characters</code></pre>
+      <p>
+        The matching condition identifies the RSA key to use. Because the
+        selector is derived from a compile-time constant, it never changes —
+        the same key is always selected for all <code>crypt5</code> links.
+        The 33 conditions exist to support different build variants of the app.
+        All conditions and their corresponding pre-computed keys are bundled
+        in this tool's <code>data/</code> directory.
+      </p>
+
+      <h4>Key Encoding and Expansion</h4>
+      <p>
+        The native library does not store raw PKCS8 DER key material directly.
+        Instead, the Java layer supplies a 1,612-character encoded key string
+        via a JNI callback. The library internally transforms this into a
+        3,168-character Base64 string, then decodes it to recover the actual
+        PKCS8 DER private key before passing it to the RSA engine.
+      </p>
+      <p>
+        The expansion algorithm is proprietary and deeply obfuscated in the
+        stripped binary. Rather than reversing it, we obtained the fully-expanded
+        keys directly by observing the key material at the exact point of
+        consumption — capturing the DER bytes as they are loaded into the RSA
+        engine for each of the 33 conditions. The resulting 33-entry lookup
+        table (~105 KB) is what this tool uses.
       </p>
 
       <!-- ── 4. Full pipeline ── -->
       <h3>The Full crypt5 Decryption Pipeline</h3>
       <div class="pipeline">
-<span class="label">payload</span><br>
-&nbsp;&nbsp;<span class="arrow">├──</span> parse nonce <span class="comment">(12 bytes after block-pair-swap inversion)</span><br>
-&nbsp;&nbsp;<span class="arrow">├──</span> parse N, url_b64 <span class="comment">(N bytes, block-pair-swap inverted)</span><br>
-&nbsp;&nbsp;<span class="arrow">└──</span> parse enc_str <span class="comment">(684 bytes, block-pair-swap inverted)</span><br>
-<br>
-locate non-trailing <span class="label">'='</span> in enc_str <span class="arrow">→</span> RSA ciphertext <span class="comment">(512 bytes)</span><br>
-<br>
-RSA-PKCS1v15 decrypt <span class="comment">(4096-bit key from expanded_rsa_keys.json)</span><br>
-&nbsp;&nbsp;<span class="arrow">→</span> 44-char base64 string<br>
-<br>
-swapPairs(rsa_plain) <span class="arrow">→</span> base64-decode <span class="arrow">→</span> 32-byte ChaCha20 key<br>
-<br>
-ChaCha20-Poly1305 decrypt(url_ciphertext, nonce, chacha_key)<br>
-&nbsp;&nbsp;<span class="arrow">→</span> intermediate bytes<br>
-<br>
-swapPairs(intermediate) <span class="arrow">→</span> base64-decode <span class="arrow">→</span> <span class="label">final URL ✓</span>
-      </div>
+<span class="label">crypt5 payload string</span>
+&nbsp;&nbsp;<span class="arrow">├─</span> strip magic prefix <span class="comment">("iaii")</span> and suffix <span class="comment">("adi" / "cadi" / …)</span>
+&nbsp;&nbsp;<span class="arrow">├─</span> read N from payload[17:19]
+&nbsp;&nbsp;<span class="arrow">├─</span> extract nonce: block-pair-swap payload[4:16] at the pair level → 12 bytes
+&nbsp;&nbsp;<span class="arrow">├─</span> extract url_b64: payload[16] + block-pair-swap(payload[20:20+N]) → <em>N</em> chars
+&nbsp;&nbsp;<span class="arrow">└─</span> extract enc_str: delimiter byte + block-pair-swap(payload[20+N:20+N+684])
+
+<span class="comment">find non-trailing '=' in enc_str → split off the Base64 RSA ciphertext</span>
+base64-decode RSA ciphertext → <span class="label">512-byte ciphertext</span>
+
+<span class="comment">look up 4096-bit RSA private key from selector → expanded key table</span>
+RSA-PKCS1v15 decrypt(ciphertext, rsa_key) → <span class="label">44-char ASCII string</span>
+
+swapPairs(rsa_plaintext) → base64-decode → <span class="label">32-byte ChaCha20 key</span>
+<span class="comment">  swapPairs swaps adjacent character pairs: ABCD → BADC</span>
+
+base64-decode(url_b64) → <span class="label">URL ciphertext + 16-byte Poly1305 tag</span>
+ChaCha20-Poly1305.decrypt(url_ciphertext, nonce=nonce, key=chacha_key)
+  → <span class="label">intermediate string</span>
+
+swapPairs(intermediate) → base64-decode → <span class="label">final URL ✓</span></div>
+
       <p>
-        Note that <em>swapPairs</em> (used in the final two steps) is a
-        different, simpler transform from the block-pair swap used in the
-        payload encoding. SwapPairs swaps adjacent character pairs throughout
-        the entire string: <code>ABCD&nbsp;→&nbsp;BADC</code>.
+        Two distinct string transforms appear in this pipeline and must not be
+        confused. The <em>block-pair swap</em> operates on 4-character blocks
+        and swaps the two 2-char halves of each block (<code>AB CD → CD AB</code>);
+        it is used to decode all three payload fields. The simpler
+        <em>swapPairs</em> operates on the whole string and swaps every adjacent
+        pair of characters (<code>ABCD → BADC</code>); it is applied to the
+        RSA plaintext (to derive the ChaCha key) and to the ChaCha output
+        (before the final Base64 decode).
       </p>
 
-      <!-- ── 5. From emulator to pure code ── -->
-      <h3>From Emulator to Pure Code</h3>
+      <!-- ── 5. Implementation ── -->
+      <h3>Browser Implementation</h3>
       <p>
-        Once the full pipeline was mapped and verified against multiple test
-        vectors, the Unicorn emulator was no longer needed. The Python
-        implementation in <code>decryptor/decrypt_crypt5_pure.py</code> and
-        this browser tool implement the identical algorithm entirely from
-        scratch — no ARM64 emulation, no <code>liberror-code.so</code>, no
-        native dependencies of any kind. The only artifact retained from the
-        emulation phase is the pre-computed 33-entry RSA key table.
-      </p>
-      <p>
-        On the browser side, two library choices needed careful consideration:
+        The entire pipeline runs in your browser with no server involvement.
+        Two cryptographic dependencies are needed, both bundled at build time:
       </p>
       <ul>
         <li>
-          <strong>RSA-PKCS1v15 decryption</strong> — the Web Crypto API does
-          not support PKCS1v15 decryption (only OAEP and PSS), so
-          <a href="https://github.com/digitalbazaar/forge" target="_blank" rel="noopener">node-forge</a>
+          <strong>RSA-PKCS1v15 decryption</strong> — the
+          <a href="https://developer.mozilla.org/en-US/docs/Web/API/SubtleCrypto" target="_blank" rel="noopener">Web Crypto API</a>
+          supports only OAEP for RSA decryption and cannot handle PKCS1v15,
+          so <a href="https://github.com/digitalbazaar/forge" target="_blank" rel="noopener">node-forge</a>
           is used instead.
         </li>
         <li>
@@ -274,13 +269,6 @@ swapPairs(intermediate) <span class="arrow">→</span> base64-decode <span class
           a modern, audited, zero-dependency cryptography library.
         </li>
       </ul>
-      <p>
-        Both are bundled at build time by Vite — no CDN requests at runtime,
-        no CORS issues, no version-skew surprises. The CDN URL approach used
-        in earlier prototypes broke because <code>@noble/ciphers</code>' jsdelivr
-        distribution doesn't re-export named symbols from sub-paths the same
-        way the npm package does when bundled.
-      </p>
 
     </article>
 
