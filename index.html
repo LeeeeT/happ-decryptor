@@ -4,24 +4,50 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Happ Link Decryptor</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@500;700;800&family=Rajdhani:wght@400;500;600;700&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet" />
   <script type="module" src="/src/main.js"></script>
 </head>
 <!-- NEW BODY BELOW - replaced by Vite rewrite -->
 <body>
 
+  <div class="backdrop" aria-hidden="true">
+    <div class="backdrop-grid"></div>
+    <div class="backdrop-scanlines"></div>
+    <div class="backdrop-glow glow-cyan"></div>
+    <div class="backdrop-glow glow-pink"></div>
+  </div>
+
   <header class="page-header">
-    <h1>Happ Link Decryptor</h1>
-    <span class="badge">crypt · crypt2 · crypt3 · crypt4 · crypt5</span>
+    <div class="brand-lockup">
+      <p class="eyebrow">Proxy Utility // Deep Link Console</p>
+      <h1>
+        <span>Happ Link</span>
+        <span>Decryptor</span>
+      </h1>
+      <p class="intro">
+        A browser-resident decoder for the full <code>happ://</code> stack,
+        from the early RSA wrappers to the native <code>crypt5</code> pipeline.
+      </p>
+    </div>
+    <div class="header-status">
+      <span class="badge">crypt · crypt2 · crypt3 · crypt4 · crypt5</span>
+      <span class="status-chip">LOCAL ONLY</span>
+    </div>
   </header>
 
   <main>
 
+    <section class="hero-grid">
+
     <!-- ── Decryptor tool ─────────────────────────────────────────────────── -->
-    <div class="tool-card">
+    <div class="tool-card panel">
+      <div class="panel-kicker">Decode Console</div>
       <h2>Decrypt a link</h2>
       <p class="subtitle">
-        Paste a <code>happ://crypt…</code> deep link and click Decrypt.
-        Everything runs locally — no data leaves your browser.
+        Paste a <code>happ://crypt…</code> deep link and fire the decoder.
+        Everything runs locally in this tab — no payload leaves your browser.
       </p>
 
       <label for="linkInput">Happ link</label>
@@ -33,7 +59,7 @@
       ></textarea>
 
       <button id="decryptBtn">Decrypt</button>
-      <p class="hint">Ctrl + Enter to decrypt</p>
+      <p class="hint">Ctrl + Enter to run</p>
 
       <div class="result-box" id="resultBox">
         <label>Result</label>
@@ -44,15 +70,53 @@
       </div>
     </div>
 
+    <aside class="signal-card panel">
+      <div class="panel-kicker">Signal Map</div>
+      <h2>Coverage</h2>
+      <ul class="signal-list">
+        <li><span>GEN 1-4</span><strong>RSA-PKCS1v15 blocks</strong></li>
+        <li><span>GEN 5</span><strong>RSA + ChaCha20-Poly1305</strong></li>
+        <li><span>KEYSET</span><strong>33 native selector entries</strong></li>
+        <li><span>MODE</span><strong>Client-side only</strong></li>
+      </ul>
+      <div class="mini-pipeline">
+        <span>INPUT</span>
+        <span>PARSE</span>
+        <span>RSA</span>
+        <span>AEAD</span>
+        <span>URL</span>
+      </div>
+      <p class="signal-note">
+        The browser build bundles the cryptographic runtime and the pre-expanded
+        key table, so the page behaves like a standalone neon-era utility.
+      </p>
+    </aside>
+
+    </section>
+
     <!-- ── Write-up ───────────────────────────────────────────────────────── -->
-    <article class="writeup">
+    <article class="writeup panel">
       <header>
+        <div class="manual-topbar" aria-hidden="true">
+          <div class="manual-lights">
+            <span></span>
+            <span></span>
+            <span></span>
+          </div>
+          <p>Archive Mode // Decryption Dossier</p>
+        </div>
         <h2>Reverse Engineering <code>happ://</code> — A Deep Dive</h2>
         <p>
           How five generations of link encryption were analysed and reimplemented —
           from a trivial RSA wrapper to a fully obfuscated native ARM64 library
           guarding 33 different private keys.
         </p>
+        <div class="writeup-meta">
+          <span>5 generations</span>
+          <span>33 RSA selector entries</span>
+          <span>RSA + AEAD pipeline</span>
+          <span>Local browser runtime</span>
+        </div>
       </header>
 
       <!-- ── 1. Background ── -->
@@ -68,8 +132,7 @@
       </p>
       <p>
         The scheme evolved through five encryption generations —
-        <code>crypt</code> through <code>crypt5</code> — each substantially
-        harder to reverse-engineer than the previous one. This tool implements
+        <code>crypt</code> through <code>crypt5</code>. This tool implements
         all five.
       </p>
 
