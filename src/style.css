@@ -182,7 +182,6 @@ footer {
   display: grid;
   gap: 0.7rem;
   justify-items: end;
-  max-width: min(100%, 24rem);
 }
 
 .status-row {
@@ -196,8 +195,6 @@ footer {
 .status-chip,
 .repo-chip,
 .panel-kicker {
-  display: inline-flex;
-  align-items: center;
   border: 1px solid var(--border);
   border-radius: 999px;
   padding: 0.28rem 0.78rem;
@@ -208,14 +205,10 @@ footer {
 }
 
 .badge {
-  max-width: 100%;
   color: var(--cyan);
   background: rgba(9, 16, 31, 0.72);
   box-shadow: inset 0 0 0 1px rgba(103, 247, 255, 0.08), var(--shadow-cyan);
   animation: chipPulse 4.2s ease-in-out infinite;
-  white-space: normal;
-  line-height: 1.5;
-  text-align: right;
 }
 
 .status-chip {
@@ -826,14 +819,19 @@ button:disabled {
 .pipeline .label { color: var(--lime); }
 .pipeline .comment { color: var(--muted); }
 
+.table-wrap {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  margin: 0.85rem 0;
+  border-radius: 18px;
+  box-shadow: 0 0 0 1px rgba(255, 83, 200, 0.08), inset 0 0 18px rgba(103, 247, 255, 0.03);
+}
+
 .layout-table {
   width: 100%;
-  margin: 0.85rem 0;
   border-collapse: collapse;
-  border-radius: 18px;
   overflow: hidden;
   font-size: 0.88rem;
-  box-shadow: 0 0 0 1px rgba(255, 83, 200, 0.08), inset 0 0 18px rgba(103, 247, 255, 0.03);
 }
 
 .layout-table th,
@@ -954,7 +952,6 @@ footer {
   }
 
   .header-status {
-    max-width: 100%;
     justify-items: start;
   }
 
@@ -985,30 +982,15 @@ footer {
     font-size: clamp(2rem, 13vw, 3.35rem);
   }
 
-  .header-status {
-    width: 100%;
-    gap: 0.55rem;
-  }
-
-  .badge,
-  .status-chip,
-  .repo-chip,
-  .panel-kicker {
-    font-size: 0.66rem;
-    letter-spacing: 0.08em;
-    padding: 0.3rem 0.62rem;
-  }
-
   .badge {
-    width: 100%;
-    justify-content: flex-start;
-    text-align: left;
-    overflow-wrap: anywhere;
+    white-space: normal;
+    line-height: 1.55;
+    text-align: center;
+    border-radius: 14px;
   }
 
-  .status-row {
-    width: 100%;
-    gap: 0.45rem;
+  .header-status {
+    max-width: 100%;
   }
 
   .manual-topbar {
@@ -1029,15 +1011,9 @@ footer {
     grid-template-columns: minmax(0, 1fr) 3rem;
   }
 
-  .layout-table {
-    display: block;
-    overflow-x: auto;
-    -webkit-overflow-scrolling: touch;
-    white-space: nowrap;
-  }
-
   .layout-table th,
   .layout-table td {
-    min-width: 7.5rem;
+    padding: 0.5rem 0.55rem;
+    font-size: 0.76rem;
   }
 }

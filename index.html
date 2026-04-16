@@ -158,6 +158,7 @@
       </p>
       <pre><code>happ://crypt/&lt;base64( RSA_block₁ ‖ RSA_block₂ ‖ … )&gt;</code></pre>
 
+      <div class="table-wrap">
       <table class="layout-table">
         <thead><tr><th>Scheme</th><th>Key size</th><th>Block size (bytes)</th><th>Algorithm</th></tr></thead>
         <tbody>
@@ -167,6 +168,7 @@
           <tr><td>crypt4</td><td>RSA-4096</td><td>512</td><td>PKCS1v15</td></tr>
         </tbody>
       </table>
+      </div>
 
       <p>
         Decryption is symmetric: split the Base64 payload back into
@@ -220,6 +222,7 @@ source = 4·k + (p + 2) mod 4</code></pre>
         characters and observing which downstream buffers changed, making it
         possible to map every position to its role in the decrypt path.
       </p>
+      <div class="table-wrap">
       <table class="layout-table">
         <thead>
           <tr><th>Offset</th><th>Length</th><th>Field</th></tr>
@@ -235,6 +238,7 @@ source = 4·k + (p + 2) mod 4</code></pre>
           <tr><td>end</td><td>≥3</td><td>Variable suffix: <code>"adi"</code>, <code>"cadi"</code>, <code>"lkadi"</code>, …</td></tr>
         </tbody>
       </table>
+      </div>
       <p>
         Nonce extraction applies the pair-swap at the 2-character pair level
         across three 4-character blocks of <code>payload[4:16]</code>:
