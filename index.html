@@ -147,9 +147,9 @@ source = 4·k + (p + 2) mod 4</code></pre>
         <tbody>
           <tr><td>0</td><td>4</td><td>Fixed magic <code>"iaii"</code></td></tr>
           <tr><td>4</td><td>12</td><td>Encoded nonce — three 4-char blocks, each block-pair-swapped</td></tr>
-          <tr><td>16</td><td>1</td><td>Separator; this character is also <code>url_b64[0]</code></td></tr>
-          <tr><td>17</td><td>2</td><td><em>N</em> — length of the encoded URL ciphertext region, as two ASCII digits</td></tr>
-          <tr><td>19</td><td>1</td><td>Additional separator byte</td></tr>
+          <tr><td>16</td><td>1</td><td>Separator byte</td></tr>
+          <tr><td>17</td><td>1</td><td>First character of URL ciphertext (= <code>url_b64[0]</code>)</td></tr>
+          <tr><td>18</td><td>2</td><td><em>N</em> — length of the URL ciphertext region, as two ASCII digits</td></tr>
           <tr><td>20</td><td><em>N</em></td><td>Encoded URL ciphertext (ChaCha20-Poly1305 output, block-pair-swapped)</td></tr>
           <tr><td>20+<em>N</em></td><td>684</td><td>Encoded RSA ciphertext region (512-byte RSA block + delimiters, block-pair-swapped)</td></tr>
           <tr><td>end</td><td>≥3</td><td>Variable suffix: <code>"adi"</code>, <code>"cadi"</code>, <code>"lkadi"</code>, …</td></tr>
@@ -215,26 +215,24 @@ selector.endswith(ends)          # checks the last 2 characters</code></pre>
 
       <!-- ── 4. Full pipeline ── -->
       <h3>The Full crypt5 Decryption Pipeline</h3>
-      <div class="pipeline">
-<span class="label">crypt5 payload string</span>
-&nbsp;&nbsp;<span class="arrow">├─</span> strip magic prefix <span class="comment">("iaii")</span> and suffix <span class="comment">("adi" / "cadi" / …)</span>
-&nbsp;&nbsp;<span class="arrow">├─</span> read N from payload[17:19]
-&nbsp;&nbsp;<span class="arrow">├─</span> extract nonce: block-pair-swap payload[4:16] at the pair level → 12 bytes
-&nbsp;&nbsp;<span class="arrow">├─</span> extract url_b64: payload[16] + block-pair-swap(payload[20:20+N]) → <em>N</em> chars
-&nbsp;&nbsp;<span class="arrow">└─</span> extract enc_str: delimiter byte + block-pair-swap(payload[20+N:20+N+684])
+      <div class="pipeline"><span class="label">crypt5 payload string</span>
+  <span class="arrow">├─</span> strip magic prefix <span class="comment">("iaii")</span> and variable suffix <span class="comment">("adi" / "cadi" / "lkadi" / …)</span>
+  <span class="arrow">├─</span> read N = int(payload[18:20])
+  <span class="arrow">├─</span> nonce   = block-pair-swap(payload[4:16])                    <span class="comment">→ 12-byte ChaCha nonce</span>
+  <span class="arrow">├─</span> url_b64 = payload[17] + block-pair-swap(payload[20:20+N])   <span class="comment">→ N chars (Base64 URL ciphertext)</span>
+  <span class="arrow">└─</span> enc_str = separator  + block-pair-swap(payload[20+N:…])    <span class="comment">→ 684 chars (encoded RSA ciphertext)</span>
 
-<span class="comment">find non-trailing '=' in enc_str → split off the Base64 RSA ciphertext</span>
-base64-decode RSA ciphertext → <span class="label">512-byte ciphertext</span>
+locate non-trailing <span class="label">'='</span> in enc_str → everything after it is the RSA ciphertext in Base64
+base64-decode RSA ciphertext → <span class="label">512-byte RSA ciphertext</span>
 
-<span class="comment">look up 4096-bit RSA private key from selector → expanded key table</span>
-RSA-PKCS1v15 decrypt(ciphertext, rsa_key) → <span class="label">44-char ASCII string</span>
+<span class="comment">derive selector from "ikdhaaoxaiilieih" → look up 4096-bit RSA private key in table</span>
+RSA-PKCS1v15.decrypt(ciphertext, key) → <span class="label">44-char Base64 string</span>
 
 swapPairs(rsa_plaintext) → base64-decode → <span class="label">32-byte ChaCha20 key</span>
-<span class="comment">  swapPairs swaps adjacent character pairs: ABCD → BADC</span>
+<span class="comment">(swapPairs: every adjacent character pair is swapped — ABCD → BADC)</span>
 
 base64-decode(url_b64) → <span class="label">URL ciphertext + 16-byte Poly1305 tag</span>
-ChaCha20-Poly1305.decrypt(url_ciphertext, nonce=nonce, key=chacha_key)
-  → <span class="label">intermediate string</span>
+ChaCha20-Poly1305.decrypt(ciphertext, nonce, key) → <span class="label">intermediate string</span>
 
 swapPairs(intermediate) → base64-decode → <span class="label">final URL ✓</span></div>
 

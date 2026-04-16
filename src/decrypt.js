@@ -13,7 +13,7 @@
  *   data/expanded_rsa_keys.json  – { "selector": "base64-PKCS8-key", … }
  */
 
-import { chacha20poly1305 } from '@noble/ciphers/chacha';
+import { chacha20poly1305 } from '@noble/ciphers/chacha.js';
 import forge from 'node-forge';
 
 // ---------------------------------------------------------------------------

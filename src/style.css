@@ -192,6 +192,7 @@ button:disabled { background: #374151; cursor: not-allowed; }
   font-family: "JetBrains Mono", "Fira Code", monospace;
   font-size: 0.78rem;
   line-height: 1.7;
+  white-space: pre-wrap;
   color: #c9d1d9;
   margin: 0.75rem 0;
 }
