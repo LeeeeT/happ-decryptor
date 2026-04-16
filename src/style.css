@@ -809,7 +809,7 @@ button:disabled {
 }
 
 .pipeline {
-  white-space: pre-wrap;
+  white-space: pre;
   color: #d6fcff;
   font-family: "Space Mono", monospace;
   font-size: 0.79rem;
@@ -982,6 +982,43 @@ footer {
     font-size: clamp(2rem, 13vw, 3.35rem);
   }
 
+  .tool-card h2 {
+    font-size: 1.2rem;
+  }
+
+  .tool-card .subtitle {
+    font-size: 0.82rem;
+  }
+
+  .signal-card h2 {
+    font-size: 1.05rem;
+  }
+
+  .signal-list strong {
+    font-size: 0.82rem;
+  }
+
+  .signal-note {
+    font-size: 0.82rem;
+  }
+
+  .writeup > header p {
+    font-size: 0.82rem;
+  }
+
+  .writeup p,
+  .writeup ul {
+    font-size: 0.82rem;
+  }
+
+  .writeup li {
+    font-size: 0.82rem;
+  }
+
+  .intro {
+    font-size: 0.84rem;
+  }
+
   .manual-topbar {
     align-items: flex-start;
     flex-direction: column;
@@ -990,6 +1027,11 @@ footer {
   .writeup h3 {
     align-items: flex-start;
     flex-direction: column;
+    font-size: 0.88rem;
+  }
+
+  .writeup h4 {
+    font-size: 0.82rem;
   }
 
   .mini-pipeline {
