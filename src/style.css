@@ -52,6 +52,18 @@ body::before {
   opacity: 0.65;
   pointer-events: none;
   z-index: 0;
+  animation: sunPulse 9s ease-in-out infinite;
+}
+
+body::after {
+  content: "";
+  position: fixed;
+  inset: 0;
+  background:
+    radial-gradient(circle at 50% 18%, rgba(255, 83, 200, 0.08), transparent 30%),
+    linear-gradient(180deg, transparent 0%, rgba(2, 2, 9, 0.12) 55%, rgba(2, 2, 9, 0.48) 100%);
+  pointer-events: none;
+  z-index: 0;
 }
 
 .backdrop {
@@ -89,6 +101,7 @@ body::before {
     transparent 4px
   );
   opacity: 0.16;
+  animation: scanDrift 12s linear infinite;
 }
 
 .backdrop-glow {
@@ -98,11 +111,13 @@ body::before {
 .glow-cyan {
   background: radial-gradient(circle, rgba(103, 247, 255, 0.22) 0%, transparent 55%);
   transform: translate(-18%, -14%);
+  animation: glowFloatCyan 11s ease-in-out infinite;
 }
 
 .glow-pink {
   background: radial-gradient(circle, rgba(255, 83, 200, 0.22) 0%, transparent 55%);
   transform: translate(46%, 8%);
+  animation: glowFloatPink 12s ease-in-out infinite;
 }
 
 .page-header,
@@ -120,6 +135,7 @@ footer {
   max-width: 1180px;
   margin: 0 auto;
   padding: 2.2rem 1.5rem 1.2rem;
+  animation: riseIn 0.9s ease-out both;
 }
 
 .brand-lockup {
@@ -184,12 +200,15 @@ footer {
   color: var(--cyan);
   background: rgba(9, 16, 31, 0.72);
   box-shadow: inset 0 0 0 1px rgba(103, 247, 255, 0.08), var(--shadow-cyan);
+  animation: chipPulse 4.2s ease-in-out infinite;
 }
 
 .status-chip {
   color: var(--amber);
   background: rgba(32, 17, 5, 0.65);
   border-color: rgba(255, 211, 107, 0.34);
+  animation: chipPulse 4.2s ease-in-out infinite;
+  animation-delay: -2.1s;
 }
 
 main {
@@ -217,6 +236,7 @@ main {
     inset 0 0 0 1px rgba(255, 255, 255, 0.03),
     0 22px 60px rgba(0, 0, 0, 0.48),
     var(--shadow-cyan);
+  animation: riseIn 0.95s ease-out both;
 }
 
 .panel::before {
@@ -224,6 +244,18 @@ main {
   position: absolute;
   inset: 0;
   background: linear-gradient(120deg, rgba(103, 247, 255, 0.06), transparent 30%, rgba(255, 83, 200, 0.05) 75%, transparent 100%);
+  pointer-events: none;
+}
+
+.panel::after {
+  content: "";
+  position: absolute;
+  inset: 1px;
+  border-radius: 22px;
+  border: 1px solid rgba(255, 255, 255, 0.04);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.06),
+    inset 0 0 32px rgba(255, 83, 200, 0.03);
   pointer-events: none;
 }
 
@@ -238,6 +270,7 @@ main {
   margin-bottom: 0.95rem;
   color: var(--cyan);
   background: rgba(8, 18, 30, 0.7);
+  box-shadow: 0 0 20px rgba(103, 247, 255, 0.12);
 }
 
 .tool-card h2,
@@ -283,6 +316,7 @@ textarea {
   border: 1px solid rgba(103, 247, 255, 0.28);
   border-radius: 18px;
   background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.02), transparent 18%),
     linear-gradient(180deg, rgba(6, 12, 24, 0.96), rgba(6, 8, 18, 0.96));
   box-shadow: inset 0 0 0 1px rgba(103, 247, 255, 0.05), inset 0 0 26px rgba(103, 247, 255, 0.04);
   color: var(--text);
@@ -305,6 +339,7 @@ textarea::placeholder {
 }
 
 button {
+  position: relative;
   width: 100%;
   margin-top: 1rem;
   padding: 0.92rem 1.2rem;
@@ -320,12 +355,27 @@ button {
   cursor: pointer;
   box-shadow: 0 0 18px rgba(255, 83, 200, 0.28), 0 0 24px rgba(103, 247, 255, 0.16);
   transition: transform 0.18s ease, box-shadow 0.18s ease, filter 0.18s ease;
+  overflow: hidden;
+}
+
+button::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(115deg, transparent 0%, rgba(255, 255, 255, 0.34) 48%, transparent 60%);
+  transform: translateX(-130%);
+  transition: transform 0.45s ease;
+  pointer-events: none;
 }
 
 button:hover {
   transform: translateY(-2px);
   filter: saturate(1.12);
   box-shadow: 0 0 22px rgba(255, 83, 200, 0.36), 0 0 34px rgba(103, 247, 255, 0.22);
+}
+
+button:hover::before {
+  transform: translateX(130%);
 }
 
 button:active { transform: translateY(0); }
@@ -365,11 +415,14 @@ button:disabled {
   padding: 0.95rem 1rem;
   border: 1px solid rgba(103, 247, 255, 0.22);
   border-radius: 18px;
-  background: rgba(5, 10, 20, 0.88);
+  background:
+    linear-gradient(180deg, rgba(10, 18, 36, 0.96), rgba(4, 8, 18, 0.92)),
+    repeating-linear-gradient(180deg, rgba(103, 247, 255, 0.03) 0 1px, transparent 1px 20px);
   font-family: "Space Mono", monospace;
   font-size: 0.84rem;
   line-height: 1.55;
   word-break: break-word;
+  box-shadow: inset 0 0 18px rgba(103, 247, 255, 0.05);
 }
 
 .result-content.success {
@@ -400,6 +453,7 @@ button:disabled {
   place-items: center;
   align-self: stretch;
   background: linear-gradient(180deg, rgba(255, 83, 200, 0.94), rgba(103, 247, 255, 0.92));
+  box-shadow: 0 0 18px rgba(255, 83, 200, 0.3), 0 0 26px rgba(103, 247, 255, 0.16);
 }
 
 .icon-button svg {
@@ -464,6 +518,12 @@ button:disabled {
   align-items: baseline;
   padding-bottom: 0.72rem;
   border-bottom: 1px solid rgba(103, 247, 255, 0.14);
+  transition: transform 0.18s ease, border-color 0.18s ease;
+}
+
+.signal-list li:hover {
+  transform: translateX(3px);
+  border-color: rgba(255, 83, 200, 0.22);
 }
 
 .signal-list span {
@@ -499,7 +559,14 @@ button:disabled {
   font-size: 0.72rem;
   letter-spacing: 0.18em;
   text-align: center;
+  box-shadow: inset 0 0 18px rgba(255, 83, 200, 0.06), 0 0 20px rgba(255, 83, 200, 0.08);
+  animation: tilePulse 5.5s ease-in-out infinite;
 }
+
+.mini-pipeline span:nth-child(2) { animation-delay: -0.8s; }
+.mini-pipeline span:nth-child(3) { animation-delay: -1.6s; }
+.mini-pipeline span:nth-child(4) { animation-delay: -2.4s; }
+.mini-pipeline span:nth-child(5) { animation-delay: -3.2s; }
 
 .signal-note {
   margin-top: 1.05rem;
@@ -552,6 +619,7 @@ button:disabled {
   border-radius: 14px;
   background: linear-gradient(90deg, rgba(9, 16, 31, 0.86), rgba(28, 9, 35, 0.74));
   box-shadow: inset 0 0 24px rgba(103, 247, 255, 0.03);
+  backdrop-filter: blur(10px);
 }
 
 .manual-topbar p {
@@ -647,6 +715,7 @@ button:disabled {
   font-family: "Space Mono", monospace;
   font-size: 0.78rem;
   box-shadow: 0 0 18px rgba(255, 83, 200, 0.1);
+  animation: chipPulse 5s ease-in-out infinite;
 }
 
 .writeup h4 {
@@ -761,6 +830,74 @@ button:disabled {
 
 .layout-table tr:hover td {
   background: rgba(15, 17, 38, 0.94);
+}
+
+@keyframes sunPulse {
+  0%, 100% {
+    opacity: 0.58;
+    transform: translateX(-50%) scale(0.98);
+  }
+  50% {
+    opacity: 0.8;
+    transform: translateX(-50%) scale(1.04);
+  }
+}
+
+@keyframes glowFloatCyan {
+  0%, 100% { transform: translate(-18%, -14%) scale(1); }
+  50% { transform: translate(-14%, -10%) scale(1.08); }
+}
+
+@keyframes glowFloatPink {
+  0%, 100% { transform: translate(46%, 8%) scale(1); }
+  50% { transform: translate(40%, 12%) scale(1.1); }
+}
+
+@keyframes scanDrift {
+  0% { transform: translateY(0); }
+  100% { transform: translateY(12px); }
+}
+
+@keyframes riseIn {
+  from {
+    opacity: 0;
+    transform: translateY(14px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes chipPulse {
+  0%, 100% {
+    box-shadow: 0 0 0 rgba(103, 247, 255, 0), var(--shadow-cyan);
+  }
+  50% {
+    box-shadow: 0 0 22px rgba(255, 83, 200, 0.12), 0 0 34px rgba(103, 247, 255, 0.16);
+  }
+}
+
+@keyframes tilePulse {
+  0%, 100% {
+    transform: translateY(0);
+    box-shadow: inset 0 0 18px rgba(255, 83, 200, 0.06), 0 0 20px rgba(255, 83, 200, 0.08);
+  }
+  50% {
+    transform: translateY(-2px);
+    box-shadow: inset 0 0 22px rgba(103, 247, 255, 0.08), 0 0 26px rgba(255, 83, 200, 0.16);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation: none !important;
+    transition: none !important;
+  }
+
+  html {
+    scroll-behavior: auto;
+  }
 }
 
 footer {
