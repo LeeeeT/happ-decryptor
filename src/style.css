@@ -19,7 +19,7 @@
   --shadow-pink: 0 0 28px rgba(255, 83, 200, 0.2);
 }
 
-html { scroll-behavior: smooth; }
+html { scroll-behavior: smooth; min-width: 480px; }
 
 body {
   position: relative;
@@ -980,17 +980,6 @@ footer {
 
   .page-header h1 {
     font-size: clamp(2rem, 13vw, 3.35rem);
-  }
-
-  .badge {
-    white-space: normal;
-    line-height: 1.55;
-    text-align: center;
-    border-radius: 14px;
-  }
-
-  .header-status {
-    max-width: 100%;
   }
 
   .manual-topbar {
