@@ -103,6 +103,19 @@ button:hover  { background: var(--purple-h); }
 button:active { background: #5b21b6; }
 button:disabled { background: #374151; cursor: not-allowed; }
 
+.result-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 0.65rem;
+}
+
+.result-actions button {
+  width: auto;
+  margin-top: 0;
+  padding: 0.45rem 0.8rem;
+  font-size: 0.8rem;
+}
+
 .result-box { margin-top: 1.25rem; display: none; }
 .result-box.visible { display: block; }
 

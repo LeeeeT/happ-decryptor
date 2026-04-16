@@ -38,6 +38,9 @@
       <div class="result-box" id="resultBox">
         <label>Result</label>
         <div class="result-content" id="resultContent"></div>
+        <div class="result-actions">
+          <button id="copyBtn" type="button" disabled>Copy</button>
+        </div>
       </div>
     </div>
 
@@ -94,7 +97,9 @@
         Decryption is symmetric: split the Base64 payload back into
         128-byte (crypt) or 512-byte (crypt2–4) blocks, decrypt each block
         independently with RSA-PKCS1v15, and concatenate the plaintext
-        fragments to recover the URL.
+        fragments to recover the URL. The app accepts both standard and
+        URL-safe Base64 alphabets, so a production implementation must also
+        normalize <code>-</code>/<code>_</code> and repair missing padding.
       </p>
       <p>
         Each of the four RSA private keys is stored verbatim as a Base64
@@ -135,10 +140,10 @@ source = 4·k + (p + 2) mod 4</code></pre>
 
       <h4>Payload Structure</h4>
       <p>
-        The full wire format of a <code>crypt5</code> payload was recovered
-        through differential analysis: by systematically varying individual
-        bytes and observing which internal buffers changed, every field was
-        mapped to its precise offset and role.
+        The verified wire format of the raw <code>crypt5</code> URI payload is
+        shown below. Each field was recovered by systematically varying single
+        characters and observing which downstream buffers changed, making it
+        possible to map every position to its role in the decrypt path.
       </p>
       <table class="layout-table">
         <thead>
@@ -147,11 +152,11 @@ source = 4·k + (p + 2) mod 4</code></pre>
         <tbody>
           <tr><td>0</td><td>4</td><td>Fixed magic <code>"iaii"</code></td></tr>
           <tr><td>4</td><td>12</td><td>Encoded nonce — three 4-char blocks, each block-pair-swapped</td></tr>
-          <tr><td>16</td><td>1</td><td>Separator byte</td></tr>
+          <tr><td>16</td><td>1</td><td>Marker / separator byte present in the wire format but not otherwise consumed by the pure pipeline</td></tr>
           <tr><td>17</td><td>1</td><td>First character of URL ciphertext (= <code>url_b64[0]</code>)</td></tr>
           <tr><td>18</td><td>2</td><td><em>N</em> — length of the URL ciphertext region, as two ASCII digits</td></tr>
-          <tr><td>20</td><td><em>N</em></td><td>Encoded URL ciphertext (ChaCha20-Poly1305 output, block-pair-swapped)</td></tr>
-          <tr><td>20+<em>N</em></td><td>684</td><td>Encoded RSA ciphertext region (512-byte RSA block + delimiters, block-pair-swapped)</td></tr>
+          <tr><td>20</td><td><em>N</em></td><td>Mixed crossover region: after undoing the block-pair swap, it yields <code>url_b64[1:]</code> plus one carried-over byte that becomes <code>enc_str[0]</code></td></tr>
+          <tr><td>20+<em>N</em></td><td>684</td><td>RSA ciphertext continuation region; 683 decoded characters from here, together with the carried-over byte above, form the 684-char <code>enc_str</code></td></tr>
           <tr><td>end</td><td>≥3</td><td>Variable suffix: <code>"adi"</code>, <code>"cadi"</code>, <code>"lkadi"</code>, …</td></tr>
         </tbody>
       </table>
@@ -161,6 +166,14 @@ source = 4·k + (p + 2) mod 4</code></pre>
       </p>
       <pre><code>n     = payload[4:16]
 nonce = n[2:4] + n[0:2]  +  n[6:8] + n[4:6]  +  n[10:12] + n[8:10]</code></pre>
+      <p>
+        The two other parsed fields are reconstructed as:
+      </p>
+      <pre><code>url_region = payload[20:20+N]
+    url_b64   = payload[17] + blockPairSwap(url_region, N - 1)
+
+    skip      = floor((N - 1) / 4) * 4 + 1
+    enc_str   = url_region[skip] + blockPairSwap(payload[20+N:20+N+684], 683)</code></pre>
       <p>
         The RSA ciphertext region contains a non-trailing <code>'='</code>
         character that acts as a delimiter; everything after it is the
@@ -190,9 +203,9 @@ selector.endswith(ends)          # checks the last 2 characters</code></pre>
       <p>
         The matching condition identifies the RSA key to use. Because the
         selector is derived from a compile-time constant, it never changes —
-        the same key is always selected for all <code>crypt5</code> links.
-        The 33 conditions exist to support different build variants of the app.
-        All conditions and their corresponding pre-computed keys are bundled
+        the same key is always selected for the currently-observed
+        <code>crypt5</code> links. The binary still carries 33 selector
+        conditions and their associated key material, all of which are bundled
         in this tool's <code>data/</code> directory.
       </p>
 
@@ -205,36 +218,44 @@ selector.endswith(ends)          # checks the last 2 characters</code></pre>
         PKCS8 DER private key before passing it to the RSA engine.
       </p>
       <p>
-        The expansion algorithm is proprietary and deeply obfuscated in the
-        stripped binary. Rather than reversing it, we obtained the fully-expanded
-        keys directly by observing the key material at the exact point of
-        consumption — capturing the DER bytes as they are loaded into the RSA
-        engine for each of the 33 conditions. The resulting 33-entry lookup
-        table (~105 KB) is what this tool uses.
+        Before that native expansion step, the 1,612-character callback result
+        itself is still shuffled: every 8-character block is rearranged from
+        <code>[0,1,2,3,4,5,6,7]</code> to <code>[5,7,1,0,2,3,6,4]</code>.
+        The stripped binary then performs an additional opaque expansion to the
+        final 3,168-character Base64 PKCS8 form. Rather than reproducing that
+        proprietary expansion logic in the browser, this tool bundles the
+        resulting fully-expanded keys directly.
       </p>
 
       <!-- ── 4. Full pipeline ── -->
       <h3>The Full crypt5 Decryption Pipeline</h3>
-      <div class="pipeline"><span class="label">crypt5 payload string</span>
-  <span class="arrow">├─</span> strip magic prefix <span class="comment">("iaii")</span> and variable suffix <span class="comment">("adi" / "cadi" / "lkadi" / …)</span>
-  <span class="arrow">├─</span> read N = int(payload[18:20])
-  <span class="arrow">├─</span> nonce   = block-pair-swap(payload[4:16])                    <span class="comment">→ 12-byte ChaCha nonce</span>
-  <span class="arrow">├─</span> url_b64 = payload[17] + block-pair-swap(payload[20:20+N])   <span class="comment">→ N chars (Base64 URL ciphertext)</span>
-  <span class="arrow">└─</span> enc_str = separator  + block-pair-swap(payload[20+N:…])    <span class="comment">→ 684 chars (encoded RSA ciphertext)</span>
-
-locate non-trailing <span class="label">'='</span> in enc_str → everything after it is the RSA ciphertext in Base64
-base64-decode RSA ciphertext → <span class="label">512-byte RSA ciphertext</span>
-
-<span class="comment">derive selector from "ikdhaaoxaiilieih" → look up 4096-bit RSA private key in table</span>
-RSA-PKCS1v15.decrypt(ciphertext, key) → <span class="label">44-char Base64 string</span>
-
-swapPairs(rsa_plaintext) → base64-decode → <span class="label">32-byte ChaCha20 key</span>
-<span class="comment">(swapPairs: every adjacent character pair is swapped — ABCD → BADC)</span>
-
-base64-decode(url_b64) → <span class="label">URL ciphertext + 16-byte Poly1305 tag</span>
-ChaCha20-Poly1305.decrypt(ciphertext, nonce, key) → <span class="label">intermediate string</span>
-
-swapPairs(intermediate) → base64-decode → <span class="label">final URL ✓</span></div>
+      <div class="pipeline"><span class="label">crypt5 URI payload</span>
+    ├─ strip <span class="comment">happ://crypt5/</span>
+    ├─ read N = int(payload[18:20])
+    ├─ decode nonce from payload[4:16]
+    │  └─ blockPairSwap at the 2-char-pair level → <span class="label">12-byte ChaCha nonce</span>
+    ├─ url_region = payload[20:20+N]
+    ├─ url_b64 = payload[17] + blockPairSwap(url_region, N - 1)
+    │  └─ yields <span class="label">Base64 URL ciphertext</span>
+    ├─ skip = floor((N - 1) / 4) * 4 + 1
+    ├─ enc_str = url_region[skip] + blockPairSwap(payload[20+N:20+N+684], 683)
+    │  └─ yields <span class="label">684-char encoded RSA field</span>
+    ├─ locate non-trailing <span class="label">'='</span> in enc_str
+    │  └─ everything after it = <span class="label">Base64 RSA ciphertext</span>
+    ├─ base64-decode → <span class="label">512-byte RSA ciphertext</span>
+    ├─ derive selector from <span class="label">"ikdhaaoxaiilieih"</span>
+    ├─ match selector against 33 conditions
+    ├─ obtain fully-expanded RSA-4096 private key
+    ├─ RSA-PKCS1v15.decrypt(ciphertext, key)
+    │  └─ returns <span class="label">44-char Base64 string</span>
+    ├─ swapPairs(rsa_plaintext)
+    ├─ base64-decode → <span class="label">32-byte ChaCha20 key</span>
+    ├─ base64-decode(url_b64)
+    │  └─ yields <span class="label">ciphertext || 16-byte Poly1305 tag</span>
+    ├─ ChaCha20-Poly1305.decrypt(ciphertext, nonce, key)
+    │  └─ returns <span class="label">intermediate string</span>
+    ├─ swapPairs(intermediate)
+    └─ base64-decode → <span class="label">final URL ✓</span></div>
 
       <p>
         Two distinct string transforms appear in this pipeline and must not be

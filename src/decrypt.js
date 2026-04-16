@@ -76,6 +76,24 @@ function uint8ToLatinStr(arr) {
   return s;
 }
 
+/** Latin-1 byte string from node-forge → Uint8Array */
+function latinStrToUint8(str) {
+  const out = new Uint8Array(str.length);
+  for (let i = 0; i < str.length; i++) out[i] = str.charCodeAt(i) & 0xff;
+  return out;
+}
+
+function concatUint8Arrays(chunks) {
+  const total = chunks.reduce((sum, chunk) => sum + chunk.length, 0);
+  const out = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    out.set(chunk, offset);
+    offset += chunk.length;
+  }
+  return out;
+}
+
 // ---------------------------------------------------------------------------
 // Crypt5 payload parsing
 // ---------------------------------------------------------------------------
@@ -206,11 +224,12 @@ async function decryptCrypt1to4(ordinal, payload) {
   const keySize = Math.ceil(privateKey.n.bitLength() / 8);
   const cipherBytes = b64DecodeUrlSafe(payload);
 
-  let plaintext = '';
+  const plaintextChunks = [];
   for (let i = 0; i < cipherBytes.length; i += keySize) {
-    plaintext += forgeRsaDecrypt(privateKey, cipherBytes.slice(i, i + keySize));
+    const decrypted = forgeRsaDecrypt(privateKey, cipherBytes.slice(i, i + keySize));
+    plaintextChunks.push(latinStrToUint8(decrypted));
   }
-  return plaintext;
+  return new TextDecoder().decode(concatUint8Arrays(plaintextChunks));
 }
 
 // ---------------------------------------------------------------------------
