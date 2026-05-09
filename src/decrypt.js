@@ -35,6 +35,13 @@ const PKCS1_KEYS_B64 = [
 // ---------------------------------------------------------------------------
 let _selectors = null;
 let _expandedKeys = null;
+const _forgePkcs8KeyCache = new Map();
+const SELECTOR_TAIL_OFFSETS_BY_LENGTH_MOD_4 = [
+  [-2, -1, -4, -3],
+  [-2, -5, -4, -1],
+  [-6, -5, -2, -1],
+  [-6, -3, -2, -1],
+];
 
 async function loadData() {
   if (_selectors && _expandedKeys) return;
@@ -105,12 +112,18 @@ function concatUint8Arrays(chunks) {
  *   source = 4k + (p+2) mod 4
  * Net effect: every 4-char block ABCD → CDAB (two 2-char pairs swapped).
  */
-function blockPairSwap(region, length) {
+function blockPairSwap(region, length = region.length) {
   const result = [];
-  for (let j = 1; j <= length; j++) {
-    const k = Math.floor((j - 1) / 4);
-    const p = (j - 1) % 4;
-    result.push(region[4 * k + ((p + 2) % 4)]);
+  for (let offset = 0; offset < length; offset += 4) {
+    const blockLength = Math.min(4, length - offset);
+    const block = region.slice(offset, offset + blockLength);
+    if (blockLength === 4) {
+      result.push(block.slice(2) + block.slice(0, 2));
+      continue;
+    }
+
+    const shift = 2 % blockLength;
+    result.push(block.slice(shift) + block.slice(0, shift));
   }
   return result.join('');
 }
@@ -120,49 +133,57 @@ function extractNonce(payload) {
   return n[2] + n[3] + n[0] + n[1] + n[6] + n[7] + n[4] + n[5] + n[10] + n[11] + n[8] + n[9];
 }
 
-function extractUrlB64(payload, N) {
-  return payload[17] + blockPairSwap(payload.slice(20, 20 + N), N - 1);
+function parseCrypt5Header(payload) {
+  const header = blockPairSwap(payload.slice(16, 20));
+  const match = header.match(/^(\d+)(.*)$/);
+  if (!match) throw new Error(`Invalid crypt5 header: ${header}`);
+
+  const N = Number.parseInt(match[1], 10);
+  const remainder = match[2];
+  return {
+    N,
+    // The first non-digit is a marker; any remaining chars prefix the decoded URL field.
+    urlPrefix: remainder.slice(1),
+  };
 }
 
-function extractEncStr(payload, N) {
-  const urlRegion = payload.slice(20, 20 + N);
-  const encRegion = payload.slice(20 + N, 20 + N + 684);
-  const skip = Math.floor((N - 1) / 4) * 4 + 1;
-  return urlRegion[skip] + blockPairSwap(encRegion, 683);
+function extractCrypt5Fields(payload, N, urlPrefix) {
+  const urlFull = blockPairSwap(payload.slice(20, 20 + N));
+  const carryLength = urlPrefix.length;
+  const urlB64 = urlPrefix + urlFull.slice(0, N - carryLength);
+  const carry = urlFull.slice(N - carryLength);
+  const encFull = blockPairSwap(payload.slice(20 + N, 20 + N + 684));
+
+  return {
+    urlB64,
+    encStr: carry + encFull.slice(0, 684 - carryLength),
+  };
 }
 
 // ---------------------------------------------------------------------------
 // Selector derivation
 // ---------------------------------------------------------------------------
-// crypt5 key selection is driven by the payload itself.
-// The selector is assembled from the reordered 4-char prefix and four
-// suffix-relative characters near the encoded tail marker. The payload length
-// varies with N, so these trailing positions cannot be hard-coded as absolute
-// offsets.
+// This matches the Android app's exact selector extraction after the Java-side
+// 6-character chunk shuffle. In raw link space the tail bytes follow a fixed
+// length-mod-4 rule; they are not chosen by probing multiple layouts.
 function deriveSelector(payload) {
-  const tail = payload.length;
-  return (
-    payload[2] +
-    payload[3] +
-    payload[0] +
-    payload[1] +
-    payload[tail - 6] +
-    payload[tail - 3] +
-    payload[tail - 2] +
-    payload[tail - 1]
-  );
+  const prefix = payload[2] + payload[3] + payload[0] + payload[1]
+  const tailOffsets = SELECTOR_TAIL_OFFSETS_BY_LENGTH_MOD_4[payload.length % 4]
+  return prefix + tailOffsets.map((offset) => payload[payload.length + offset]).join('')
 }
 
 async function getExpandedRsaKey(selector) {
   await loadData();
-  if (_expandedKeys[selector]) return _expandedKeys[selector];
+
   for (const [starts, mid, ends] of _selectors) {
     if (selector.startsWith(starts) && selector.slice(2, 6) === mid && selector.endsWith(ends)) {
-      const key = _expandedKeys[starts + mid + ends];
-      if (key) return key;
+      const key = _expandedKeys[starts + mid + ends]
+      if (key) return key
+      break
     }
   }
-  throw new Error(`No RSA key found for selector: ${selector}`);
+
+  throw new Error(`No RSA key found for selector: ${selector}`)
 }
 
 // ---------------------------------------------------------------------------
@@ -170,9 +191,14 @@ async function getExpandedRsaKey(selector) {
 // ---------------------------------------------------------------------------
 
 function loadForgePkcs8Key(pkcs8B64) {
+  const cached = _forgePkcs8KeyCache.get(pkcs8B64);
+  if (cached) return cached;
+
   const lines = pkcs8B64.replace(/\s/g, '').match(/.{1,64}/g).join('\n');
   const pem = `-----BEGIN PRIVATE KEY-----\n${lines}\n-----END PRIVATE KEY-----`;
-  return forge.pki.privateKeyFromPem(pem);
+  const key = forge.pki.privateKeyFromPem(pem);
+  _forgePkcs8KeyCache.set(pkcs8B64, key);
+  return key;
 }
 
 function loadForgePkcs1Key(pkcs1B64) {
@@ -189,38 +215,25 @@ function forgeRsaDecrypt(privateKey, cipherBytes) {
 // Crypt5 pipeline
 // ---------------------------------------------------------------------------
 async function decryptCrypt5(payload) {
-  const N = parseInt(payload.slice(18, 20), 10);
-  const nonceStr = extractNonce(payload);
-  const urlB64 = extractUrlB64(payload, N);
-  const encStr = extractEncStr(payload, N);
+  const { N, urlPrefix } = parseCrypt5Header(payload)
+  const nonceStr = extractNonce(payload)
+  const { urlB64, encStr } = extractCrypt5Fields(payload, N, urlPrefix)
 
-  // Locate the non-trailing '=' in enc_str — it separates the RSA ciphertext
-  const trailingStart = encStr.replace(/=+$/, '').length;
-  const eqIdx = encStr.indexOf('=');
-  const cipherB64 =
-    eqIdx >= 0 && eqIdx < trailingStart ? encStr.slice(eqIdx + 1) : encStr;
-  const cb = cipherB64.replace(/=+$/, '');
-  const cbPadded = cb + '='.repeat((4 - (cb.length % 4)) % 4);
-  const cipherBytes = Uint8Array.from(atob(cbPadded), (c) => c.charCodeAt(0));
+  const selector = deriveSelector(payload)
+  const rsaKeyB64 = await getExpandedRsaKey(selector)
+  const privateKey = loadForgePkcs8Key(rsaKeyB64)
+  const cipherBytes = b64DecodeUrlSafe(encStr)
+  const rsaPlainStr = forgeRsaDecrypt(privateKey, cipherBytes)
 
-  // RSA-PKCS1v15 decrypt → 44-char base64 string
-  const selector = deriveSelector(payload);
-  const rsaKeyB64 = await getExpandedRsaKey(selector);
-  const privateKey = loadForgePkcs8Key(rsaKeyB64);
-  const rsaPlainStr = forgeRsaDecrypt(privateKey, cipherBytes);
-
-  // swapPairs(rsa_plain) → base64-decode → 32-byte ChaCha20 key
-  const chachaKey = b64DecodeUrlSafe(swapPairs(rsaPlainStr));
-
-  // ChaCha20-Poly1305 decrypt
-  const nonce = new TextEncoder().encode(nonceStr);
-  const ciphertext = b64DecodeUrlSafe(urlB64);
-  const chacha = chacha20poly1305(chachaKey, nonce);
-  const intermediate = chacha.decrypt(ciphertext);
+  const chachaKey = b64DecodeUrlSafe(swapPairs(rsaPlainStr))
+  const nonce = new TextEncoder().encode(nonceStr)
+  const ciphertext = b64DecodeUrlSafe(urlB64)
+  const chacha = chacha20poly1305(chachaKey, nonce)
+  const intermediate = chacha.decrypt(ciphertext)
 
   // swapPairs(intermediate) → base64-decode → final URL
-  const intermediateStr = new TextDecoder().decode(intermediate);
-  return new TextDecoder().decode(b64DecodeUrlSafe(swapPairs(intermediateStr)));
+  const intermediateStr = new TextDecoder().decode(intermediate)
+  return new TextDecoder().decode(b64DecodeUrlSafe(swapPairs(intermediateStr)))
 }
 
 // ---------------------------------------------------------------------------

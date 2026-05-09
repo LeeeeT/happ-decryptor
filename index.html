@@ -213,12 +213,10 @@ source = 4*k + (p + 2) mod 4</code></pre>
         <tbody>
           <tr><td>0</td><td>4</td><td>Variable leading quartet; these four characters feed the selector prefix as <code>payload[2] + payload[3] + payload[0] + payload[1]</code></td></tr>
           <tr><td>4</td><td>12</td><td>Encoded nonce — three 4-char blocks, each block-pair-swapped</td></tr>
-          <tr><td>16</td><td>1</td><td>Single wire-format marker byte; the browser pipeline preserves its position but does not consume it directly</td></tr>
-          <tr><td>17</td><td>1</td><td>First character of the URL ciphertext (<code>url_b64[0]</code>)</td></tr>
-          <tr><td>18</td><td>2</td><td><em>N</em> — length of the URL ciphertext region, stored as two ASCII digits</td></tr>
-          <tr><td>20</td><td><em>N</em></td><td>Mixed crossover region: after undoing the block-pair swap it yields <code>url_b64[1:]</code> plus one carried byte that becomes <code>enc_str[0]</code></td></tr>
-          <tr><td>20+<em>N</em></td><td>684</td><td>RSA continuation region; 683 decoded characters from here combine with the carried byte above to form the 684-char <code>enc_str</code></td></tr>
-          <tr><td>end</td><td>≥3</td><td>Variable suffix; the final selector reads four suffix-relative characters from this tail at <code>[-6, -3, -2, -1]</code></td></tr>
+          <tr><td>16</td><td>4</td><td>Header block; after <code>blockPairSwap</code> it becomes <code>&lt;decimal N&gt;&lt;marker&gt;&lt;optional url prefix&gt;</code>. Two-digit <code>N</code> leaves one URL-prefix character in the header; three-digit <code>N</code> consumes the full block.</td></tr>
+          <tr><td>20</td><td><em>N</em></td><td>URL region; undoing the block-pair swap across the full region yields the main URL ciphertext. If the header contributed a URL-prefix character, that prefix is prepended and the same number of trailing transformed characters are carried into the RSA field.</td></tr>
+          <tr><td>20+<em>N</em></td><td>684</td><td>RSA field; undoing the block-pair swap across all 684 characters yields the RSA ciphertext. When a carried byte exists from the URL region, it replaces the same number of trailing transformed characters so <code>enc_str</code> stays 684 characters long.</td></tr>
+          <tr><td>end</td><td>≥3</td><td>Variable suffix; legacy payloads use the older suffix-relative selector tail, while longer payloads can encode the selector tail in the final 4-character block.</td></tr>
         </tbody>
       </table>
       </div>
@@ -231,40 +229,48 @@ nonce = n[2:4] + n[0:2] + n[6:8] + n[4:6] + n[10:12] + n[8:10]</code></pre>
       <p>
         The other two parsed fields are reconstructed as:
       </p>
-      <pre><code>url_region = payload[20:20+N]
-url_b64    = payload[17] + blockPairSwap(url_region, N - 1)
+      <pre><code>header     = blockPairSwap(payload[16:20])
+digits     = leading decimal run in header
+suffix     = header[len(digits):]          # marker + optional url prefix
+url_prefix = suffix[1:]
 
-skip       = floor((N - 1) / 4) * 4 + 1
-enc_str    = url_region[skip] + blockPairSwap(payload[20+N:20+N+684], 683)</code></pre>
+url_full   = blockPairSwap(payload[20:20+N])
+url_b64    = url_prefix + url_full[:N - len(url_prefix)]
+
+carry      = url_full[N - len(url_prefix):]
+enc_full   = blockPairSwap(payload[20+N:20+N+684])
+enc_str    = carry + enc_full[:684 - len(carry)]</code></pre>
       <p>
-        The decoder checks whether <code>enc_str</code> contains a non-trailing
-        <code>=</code> delimiter. If it does, everything after that delimiter is
-        treated as the Base64 RSA ciphertext; otherwise the whole field is used
-        directly after trimming trailing Base64 padding.
+        The fully reconstructed <code>enc_str</code> is the 684-character Base64
+        RSA ciphertext. The raw payload can still contain internal
+        <code>==</code> runs, but those live inside the URL region for the long
+        3-digit-<code>N</code> variant rather than acting as an RSA delimiter.
       </p>
 
       <h4>Selector Derivation</h4>
       <p>
-        The selector comes directly from the payload. The prefix uses fixed
-        positions, while the tail uses suffix-relative positions because the
-        payload length varies with <code>N</code>:
+        Native tracing shows that selector derivation is exact and depends only
+        on the payload bytes. The prefix is fixed, while the tail follows a
+        4-case pattern keyed by <code>payload.length mod 4</code>:
       </p>
-      <pre><code>selector =
-  payload[2] + payload[3] + payload[0] + payload[1] +
-  payload[payload.length - 6] +
-  payload[payload.length - 3] +
-  payload[payload.length - 2] +
-  payload[payload.length - 1]</code></pre>
+      <pre><code>prefix = payload[2] + payload[3] + payload[0] + payload[1]
+
+tail_offsets_by_length_mod_4 = {
+  0: [-2, -1, -4, -3],
+  1: [-2, -5, -4, -1],
+  2: [-6, -5, -2, -1],
+  3: [-6, -3, -2, -1],
+}
+
+tail_offsets = tail_offsets_by_length_mod_4[payload.length mod 4]
+selector = prefix + payload[tail_offsets[0]] + ... + payload[tail_offsets[3]]</code></pre>
       <p>
-        The resulting 8-character selector is matched against 34 stored
-        condition tuples <code>(starts, mid, ends)</code>:
+        That 8-character selector is then matched exactly against the 34 stored
+        condition tuples <code>(starts, mid, ends)</code> to choose the RSA key.
       </p>
       <pre><code>selector.startswith(starts)   # first 2 chars
 selector[2:6] == mid          # middle 4 chars
 selector.endswith(ends)       # last 2 chars</code></pre>
-      <p>
-        The matching tuple identifies which bundled RSA key to use for the link.
-      </p>
 
       <h4>Key Expansion And Reconstruction</h4>
       <p>
@@ -285,20 +291,22 @@ selector.endswith(ends)       # last 2 chars</code></pre>
       <h3>The Full <code>crypt5</code> Decryption Pipeline</h3>
       <div class="pipeline"><span class="label">crypt5 URI payload</span>
     ├─ strip <span class="comment">happ://crypt5/</span>
-    ├─ read N = int(payload[18:20])
+    ├─ decode header = blockPairSwap(payload[16:20])
+    ├─ parse N from the header's leading decimal run
     ├─ decode nonce from payload[4:16]
     │  └─ pair-swap across three blocks → <span class="label">12-byte ChaCha nonce</span>
     ├─ url_region = payload[20:20+N]
-    ├─ url_b64 = payload[17] + blockPairSwap(url_region, N - 1)
+    ├─ url_full = blockPairSwap(url_region)
+    ├─ url_prefix = header[len(decimal run)+1:]
+    ├─ url_b64 = url_prefix + url_full[:N - len(url_prefix)]
     │  └─ yields <span class="label">Base64 URL ciphertext</span>
-    ├─ skip = floor((N - 1) / 4) * 4 + 1
-    ├─ enc_str = url_region[skip] + blockPairSwap(payload[20+N:20+N+684], 683)
+    ├─ carry = url_full[N - len(url_prefix):]
+    ├─ enc_full = blockPairSwap(payload[20+N:20+N+684])
+    ├─ enc_str = carry + enc_full[:684 - len(carry)]
     │  └─ yields <span class="label">684-char encoded RSA field</span>
-    ├─ if enc_str has a non-trailing <span class="label">=</span>, use the suffix after it
-    │  └─ otherwise use enc_str itself as the <span class="label">Base64 RSA ciphertext</span>
     ├─ base64-decode → <span class="label">512-byte RSA ciphertext</span>
-    ├─ derive selector from payload[2,3,0,1,-6,-3,-2,-1]
-    ├─ match selector against 34 conditions
+    ├─ derive selector from payload[2,3,0,1] plus the length-mod-4 tail rule
+    ├─ match selector against the bundled condition table
     ├─ load bundled PKCS#8 RSA-4096 private key
     ├─ RSA-PKCS1v15.decrypt(ciphertext, key)
     │  └─ returns <span class="label">44-char Base64 string</span>
