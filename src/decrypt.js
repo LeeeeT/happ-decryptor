@@ -132,18 +132,22 @@ function extractEncStr(payload, N) {
 }
 
 // ---------------------------------------------------------------------------
-// Selector derivation  (mirrors Python _derive_selector)
+// Selector derivation
 // ---------------------------------------------------------------------------
-const GETHELP_ARG = 'ikdhaaoxaiilieih';
-
-function deriveSelector(inputStr) {
-  const rev = [...inputStr].reverse().join('');
-  const result = [];
-  for (let i = 0; i < rev.length; i += 2) {
-    const chunk = rev.slice(i, i + 2);
-    result.push(chunk.length > 1 ? chunk[1] : chunk[0]);
-  }
-  return result.join('');
+// crypt5 key selection is driven by the payload itself.
+// The selector is assembled from the reordered 4-char prefix and the trailing
+// 4 characters around the encoded suffix marker.
+function deriveSelector(payload) {
+  return (
+    payload[2] +
+    payload[3] +
+    payload[0] +
+    payload[1] +
+    payload[761] +
+    payload[764] +
+    payload[765] +
+    payload[766]
+  );
 }
 
 async function getExpandedRsaKey(selector) {
@@ -197,7 +201,7 @@ async function decryptCrypt5(payload) {
   const cipherBytes = Uint8Array.from(atob(cbPadded), (c) => c.charCodeAt(0));
 
   // RSA-PKCS1v15 decrypt → 44-char base64 string
-  const selector = deriveSelector(GETHELP_ARG);
+  const selector = deriveSelector(payload);
   const rsaKeyB64 = await getExpandedRsaKey(selector);
   const privateKey = loadForgePkcs8Key(rsaKeyB64);
   const rsaPlainStr = forgeRsaDecrypt(privateKey, cipherBytes);

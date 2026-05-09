@@ -1,26 +1,36 @@
 # Happ Link Decryptor
 
-A browser-based tool that decrypts `happ://` deep links (all five generations: `crypt` through `crypt5`) entirely client-side. No data is sent to any server.
+Browser-based decryptor for supported `happ://` deep links.
 
-## Live site
+The app runs entirely client-side and supports all currently bundled formats:
+`crypt`, `crypt2`, `crypt3`, `crypt4`, and `crypt5`.
 
-Deployed via GitHub Pages — see the Actions tab for the latest build.
+## Highlights
+
+- Local decryption in the browser
+- Support for legacy RSA-wrapped links and current `crypt5` links
+- 34 bundled crypt5 RSA keys and selector conditions generated from the current APK snapshot
+- Static compatibility data committed in `public/data/`
+- No APK processing, native emulation, or external services required at runtime
 
 ## Development
 
 ```bash
 npm install
-npm run dev       # dev server at http://localhost:5173
-npm run build     # production build → dist/
-npm run preview   # preview the production build locally
+npm run dev
+npm run build
+npm run preview
 ```
 
-## How it works
+## Reverse Engineering Notes
 
-See the in-page write-up for a detailed explanation of the `happ://` encryption scheme and how each generation was analysed and reimplemented.
+The detailed reverse-engineering log lives in the in-page write-up in [`index.html`](./index.html).
 
-The two cryptographic dependencies are:
-- [node-forge](https://github.com/digitalbazaar/forge) — RSA-PKCS1v15 decryption (Web Crypto API does not support PKCS1v15)
-- [@noble/ciphers](https://github.com/paulmillr/noble-ciphers) — ChaCha20-Poly1305
+## Runtime Dependencies
 
-Both are bundled by Vite at build time.
+- [`node-forge`](https://github.com/digitalbazaar/forge) for RSA PKCS#1 v1.5 decryption
+- [`@noble/ciphers`](https://github.com/paulmillr/noble-ciphers) for ChaCha20-Poly1305
+
+## Privacy
+
+Decryption happens locally in the browser tab. The app does not upload links or decrypted results to a server.
