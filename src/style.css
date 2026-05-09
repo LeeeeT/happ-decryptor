@@ -210,6 +210,13 @@ footer {
   animation: chipPulse 4.2s ease-in-out infinite;
 }
 
+.status-chip {
+  color: #ffe6a3;
+  background: rgba(40, 24, 7, 0.72);
+  border-color: rgba(255, 211, 107, 0.28);
+  box-shadow: inset 0 0 0 1px rgba(255, 211, 107, 0.08);
+}
+
 .github-link {
   display: inline-flex;
   align-items: center;
