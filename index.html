@@ -211,9 +211,9 @@ source = 4*k + (p + 2) mod 4</code></pre>
           <tr><th>Offset</th><th>Length</th><th>Field</th></tr>
         </thead>
         <tbody>
-          <tr><td>0</td><td>4</td><td>Fixed magic <code>"iaii"</code></td></tr>
+          <tr><td>0</td><td>4</td><td>Variable leading quartet; these four characters feed the selector prefix as <code>payload[2] + payload[3] + payload[0] + payload[1]</code></td></tr>
           <tr><td>4</td><td>12</td><td>Encoded nonce — three 4-char blocks, each block-pair-swapped</td></tr>
-          <tr><td>16</td><td>1</td><td>Marker / separator byte preserved from the wire format</td></tr>
+          <tr><td>16</td><td>1</td><td>Single wire-format marker byte; the browser pipeline preserves its position but does not consume it directly</td></tr>
           <tr><td>17</td><td>1</td><td>First character of the URL ciphertext (<code>url_b64[0]</code>)</td></tr>
           <tr><td>18</td><td>2</td><td><em>N</em> — length of the URL ciphertext region, stored as two ASCII digits</td></tr>
           <tr><td>20</td><td><em>N</em></td><td>Mixed crossover region: after undoing the block-pair swap it yields <code>url_b64[1:]</code> plus one carried byte that becomes <code>enc_str[0]</code></td></tr>
@@ -237,9 +237,10 @@ url_b64    = payload[17] + blockPairSwap(url_region, N - 1)
 skip       = floor((N - 1) / 4) * 4 + 1
 enc_str    = url_region[skip] + blockPairSwap(payload[20+N:20+N+684], 683)</code></pre>
       <p>
-        The encoded RSA field contains a non-trailing <code>=</code> delimiter.
-        Everything after that delimiter is the Base64-encoded 512-byte RSA
-        ciphertext.
+        The decoder checks whether <code>enc_str</code> contains a non-trailing
+        <code>=</code> delimiter. If it does, everything after that delimiter is
+        treated as the Base64 RSA ciphertext; otherwise the whole field is used
+        directly after trimming trailing Base64 padding.
       </p>
 
       <h4>Selector Derivation</h4>
@@ -293,8 +294,8 @@ selector.endswith(ends)       # last 2 chars</code></pre>
     ├─ skip = floor((N - 1) / 4) * 4 + 1
     ├─ enc_str = url_region[skip] + blockPairSwap(payload[20+N:20+N+684], 683)
     │  └─ yields <span class="label">684-char encoded RSA field</span>
-    ├─ locate the non-trailing <span class="label">=</span> in enc_str
-    │  └─ everything after it = <span class="label">Base64 RSA ciphertext</span>
+    ├─ if enc_str has a non-trailing <span class="label">=</span>, use the suffix after it
+    │  └─ otherwise use enc_str itself as the <span class="label">Base64 RSA ciphertext</span>
     ├─ base64-decode → <span class="label">512-byte RSA ciphertext</span>
     ├─ derive selector from payload[2,3,0,1,-6,-3,-2,-1]
     ├─ match selector against 34 conditions
