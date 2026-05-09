@@ -119,14 +119,12 @@
             <span></span>
             <span></span>
           </div>
-          <p>Reference // Reverse-Engineering Log</p>
+          <p>Reference</p>
         </div>
         <h2>Reverse Engineering <code>happ://</code> — Decryption Dossier</h2>
         <p>
-          The notes below capture the final verified model of all five Happ link
-          generations — from the legacy RSA wrappers to the corrected
-          <code>crypt5</code> selector logic and the rebuilt 34-key compatibility
-          snapshot now shipped with this site.
+          This write-up summarizes how the Happ link formats were reverse-
+          engineered and how the browser decrypts each generation locally.
         </p>
         <div class="writeup-meta">
           <span>5 generations</span>
@@ -146,27 +144,12 @@
         currently bundled generation: <code>crypt</code> through
         <code>crypt5</code>.
       </p>
-      <p>
-        The early generations are straightforward RSA wrappers. The fifth
-        generation adds a custom payload layout, a selector-driven key table,
-        native key expansion, and a hybrid RSA + ChaCha20-Poly1305 decrypt path.
-      </p>
-
-      <h3>Reverse-Engineering Log</h3>
-      <ul>
-        <li>First-pass analysis confirmed that <code>crypt</code> through <code>crypt4</code> are direct RSA-PKCS1v15 wrappers with hardcoded private keys embedded in the app.</li>
-        <li>Byte-level tracing of <code>crypt5</code> payloads exposed a stable wire format built around a reusable block-pair swap transform, a 12-byte nonce field, a mixed crossover region, and a 684-character RSA field.</li>
-        <li>An early selector hypothesis based on the JNI helper constant <code>ikdhaaoxaiilieih</code> explained the first working sample, but broader validation failed. The corrected selector is payload-driven: <code>payload[2,3,0,1] + payload[-6,-3,-2,-1]</code>.</li>
-        <li>The raw key strings referenced by the smali are not usable PKCS#8 blobs. The native expansion step <code>sub_17b1d0</code> turns obfuscated RSA-CRT fragments into full private keys.</li>
-        <li>Reconstructing <code>q</code>, <code>dp</code>, <code>dq</code>, and <code>qi</code> from those fragments and solving for the missing prime <code>p</code> recovered all 34 RSA-4096 keys, including the missing <code>irnejvft</code> entry and the corrected <code>qzmtapkx</code> key.</li>
-        <li>With the full selector table restored, the previously failing sample ending in <code>jlcvft</code> now decrypts correctly in the browser to its destination URL.</li>
-      </ul>
 
       <h3>Generations 1–4: Hardcoded RSA Keys</h3>
       <p>
-        The first four generations share the same conceptual structure. A target
-        URL is encrypted with RSA-PKCS1v15, split into fixed-size blocks matching
-        the key modulus, and Base64-encoded:
+        The first four generations are direct RSA-PKCS1v15 wrappers. A target
+        URL is encrypted, split into fixed-size blocks matching the key modulus,
+        and Base64-encoded:
       </p>
       <pre><code>happ://crypt/&lt;base64( RSA_block1 || RSA_block2 || ... )&gt;</code></pre>
 
@@ -190,11 +173,7 @@
         <code>-</code> and <code>_</code> and restores missing padding before
         decoding.
       </p>
-      <p>
-        Each of the four legacy private keys is stored directly as a Base64
-        string literal in the application bytecode. There is no selector lookup
-        and no extra native expansion step for these formats.
-      </p>
+      <p>Each legacy private key is embedded directly in the application bytecode.</p>
 
       <h3>Generation 5: Payload Layout And Native Keying</h3>
       <p>
@@ -223,8 +202,8 @@ source = 4*k + (p + 2) mod 4</code></pre>
       <h4>Payload Structure</h4>
       <p>
         The verified <code>crypt5</code> payload layout is shown below. These
-        offsets were recovered by mutating sample payloads one character at a
-        time and tracing which downstream buffers changed in the decrypt path.
+        offsets were recovered by tracing how controlled payload changes affect
+        the downstream decrypt buffers.
       </p>
       <div class="table-wrap">
       <table class="layout-table">
@@ -263,13 +242,11 @@ enc_str    = url_region[skip] + blockPairSwap(payload[20+N:20+N+684], 683)</code
         ciphertext.
       </p>
 
-      <h4>Selector Derivation: Corrected Final Formula</h4>
+      <h4>Selector Derivation</h4>
       <p>
-        The final selector is not derived from a fixed helper constant. That was
-        an intermediate hypothesis that only explained a subset of samples. The
-        working selector formula comes directly from the payload. The prefix is
-        fixed-position, but the tail is suffix-relative because the payload
-        length varies with <code>N</code>:
+        The selector comes directly from the payload. The prefix uses fixed
+        positions, while the tail uses suffix-relative positions because the
+        payload length varies with <code>N</code>:
       </p>
       <pre><code>selector =
   payload[2] + payload[3] + payload[0] + payload[1] +
@@ -286,8 +263,6 @@ selector[2:6] == mid          # middle 4 chars
 selector.endswith(ends)       # last 2 chars</code></pre>
       <p>
         The matching tuple identifies which bundled RSA key to use for the link.
-        This corrected formula is what allows selectors such as
-        <code>irnejvft</code> to resolve correctly.
       </p>
 
       <h4>Key Expansion And Reconstruction</h4>
@@ -303,8 +278,7 @@ selector.endswith(ends)       # last 2 chars</code></pre>
         <code>dq</code>, and <code>qi</code>. Recovering the missing prime
         <code>p</code> from those fragments makes it possible to rebuild the full
         RSA-4096 private key, serialize it as PKCS#8, and bundle the result as a
-        static JSON asset. That reconstruction step is what filled in the last
-        missing selector entry and produced the final 34-key snapshot.
+        static JSON asset for the app's 34-key compatibility snapshot.
       </p>
 
       <h3>The Full <code>crypt5</code> Decryption Pipeline</h3>
@@ -347,22 +321,16 @@ selector.endswith(ends)       # last 2 chars</code></pre>
 
       <h3>Browser Implementation</h3>
       <p>
-        The entire decrypt path runs in the browser with no server involvement.
-        Two cryptographic dependencies are bundled at build time:
+        The browser implementation uses two cryptographic dependencies:
       </p>
       <ul>
         <li><strong>RSA-PKCS1v15 decryption</strong> uses <a href="https://github.com/digitalbazaar/forge" target="_blank" rel="noopener">node-forge</a>, because the Web Crypto API does not expose PKCS1v15 RSA decryption.</li>
         <li><strong>ChaCha20-Poly1305</strong> uses <a href="https://github.com/paulmillr/noble-ciphers" target="_blank" rel="noopener">@noble/ciphers</a>.</li>
       </ul>
       <p>
-        The public repo ships only the runtime snapshot in
-        <code>public/data/</code>: the selector table and the already-expanded
-        PKCS#8 keys. Regeneration stays offline, and the production app never
-        needs APK assets, native bindings, or server-side help at runtime.
-      </p>
-      <p>
-        All decryption happens locally in the current tab. The source link and
-        the decrypted destination never leave your browser.
+        The selector table and expanded PKCS#8 keys are bundled in
+        <code>public/data/</code>, so the complete decrypt path runs locally in
+        the browser without APK assets, native bindings, or server-side help.
       </p>
 
     </article>
