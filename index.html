@@ -155,7 +155,7 @@
       <ul>
         <li>First-pass analysis confirmed that <code>crypt</code> through <code>crypt4</code> are direct RSA-PKCS1v15 wrappers with hardcoded private keys embedded in the app.</li>
         <li>Byte-level tracing of <code>crypt5</code> payloads exposed a stable wire format built around a reusable block-pair swap transform, a 12-byte nonce field, a mixed crossover region, and a 684-character RSA field.</li>
-        <li>An early selector hypothesis based on the JNI helper constant <code>ikdhaaoxaiilieih</code> explained the first working sample, but broader validation failed. The corrected selector is payload-driven: <code>payload[2,3,0,1] + payload[761,764,765,766]</code>.</li>
+        <li>An early selector hypothesis based on the JNI helper constant <code>ikdhaaoxaiilieih</code> explained the first working sample, but broader validation failed. The corrected selector is payload-driven: <code>payload[2,3,0,1] + payload[-6,-3,-2,-1]</code>.</li>
         <li>The raw key strings referenced by the smali are not usable PKCS#8 blobs. The native expansion step <code>sub_17b1d0</code> turns obfuscated RSA-CRT fragments into full private keys.</li>
         <li>Reconstructing <code>q</code>, <code>dp</code>, <code>dq</code>, and <code>qi</code> from those fragments and solving for the missing prime <code>p</code> recovered all 34 RSA-4096 keys, including the missing <code>irnejvft</code> entry and the corrected <code>qzmtapkx</code> key.</li>
         <li>With the full selector table restored, the previously failing sample ending in <code>jlcvft</code> now decrypts correctly in the browser to its destination URL.</li>
@@ -238,7 +238,7 @@ source = 4*k + (p + 2) mod 4</code></pre>
           <tr><td>18</td><td>2</td><td><em>N</em> — length of the URL ciphertext region, stored as two ASCII digits</td></tr>
           <tr><td>20</td><td><em>N</em></td><td>Mixed crossover region: after undoing the block-pair swap it yields <code>url_b64[1:]</code> plus one carried byte that becomes <code>enc_str[0]</code></td></tr>
           <tr><td>20+<em>N</em></td><td>684</td><td>RSA continuation region; 683 decoded characters from here combine with the carried byte above to form the 684-char <code>enc_str</code></td></tr>
-          <tr><td>end</td><td>≥3</td><td>Variable suffix, including the selector-bearing tail positions used in the final key lookup</td></tr>
+          <tr><td>end</td><td>≥3</td><td>Variable suffix; the final selector reads four suffix-relative characters from this tail at <code>[-6, -3, -2, -1]</code></td></tr>
         </tbody>
       </table>
       </div>
@@ -266,11 +266,16 @@ enc_str    = url_region[skip] + blockPairSwap(payload[20+N:20+N+684], 683)</code
       <p>
         The final selector is not derived from a fixed helper constant. That was
         an intermediate hypothesis that only explained a subset of samples. The
-        working selector formula comes directly from the payload:
+        working selector formula comes directly from the payload. The prefix is
+        fixed-position, but the tail is suffix-relative because the payload
+        length varies with <code>N</code>:
       </p>
       <pre><code>selector =
   payload[2] + payload[3] + payload[0] + payload[1] +
-  payload[761] + payload[764] + payload[765] + payload[766]</code></pre>
+  payload[payload.length - 6] +
+  payload[payload.length - 3] +
+  payload[payload.length - 2] +
+  payload[payload.length - 1]</code></pre>
       <p>
         The resulting 8-character selector is matched against 34 stored
         condition tuples <code>(starts, mid, ends)</code>:
@@ -316,7 +321,7 @@ selector.endswith(ends)       # last 2 chars</code></pre>
     ├─ locate the non-trailing <span class="label">=</span> in enc_str
     │  └─ everything after it = <span class="label">Base64 RSA ciphertext</span>
     ├─ base64-decode → <span class="label">512-byte RSA ciphertext</span>
-    ├─ derive selector from payload[2,3,0,1,761,764,765,766]
+    ├─ derive selector from payload[2,3,0,1,-6,-3,-2,-1]
     ├─ match selector against 34 conditions
     ├─ load bundled PKCS#8 RSA-4096 private key
     ├─ RSA-PKCS1v15.decrypt(ciphertext, key)

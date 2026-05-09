@@ -135,18 +135,21 @@ function extractEncStr(payload, N) {
 // Selector derivation
 // ---------------------------------------------------------------------------
 // crypt5 key selection is driven by the payload itself.
-// The selector is assembled from the reordered 4-char prefix and the trailing
-// 4 characters around the encoded suffix marker.
+// The selector is assembled from the reordered 4-char prefix and four
+// suffix-relative characters near the encoded tail marker. The payload length
+// varies with N, so these trailing positions cannot be hard-coded as absolute
+// offsets.
 function deriveSelector(payload) {
+  const tail = payload.length;
   return (
     payload[2] +
     payload[3] +
     payload[0] +
     payload[1] +
-    payload[761] +
-    payload[764] +
-    payload[765] +
-    payload[766]
+    payload[tail - 6] +
+    payload[tail - 3] +
+    payload[tail - 2] +
+    payload[tail - 1]
   );
 }
 
