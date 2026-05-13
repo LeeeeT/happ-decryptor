@@ -8,9 +8,8 @@
  *   node-forge  → RSA PKCS1v15 decrypt
  *   @noble/ciphers → ChaCha20-Poly1305 decrypt
  *
- * Runtime data (served from /public/data/, fetched on first call):
- *   data/selectors.json          – [[starts, mid, ends], …] for crypt5 key selection
- *   data/expanded_rsa_keys.json  – { "selector": "base64-PKCS8-key", … }
+ * Runtime data (served from /public/data/, fetched on first crypt5 call):
+ *   data/expanded_rsa_keys.json  – { "marker": "base64-PKCS8-key", … }
  */
 
 import { chacha20poly1305 } from '@noble/ciphers/chacha.js';
@@ -33,29 +32,16 @@ const PKCS1_KEYS_B64 = [
 // ---------------------------------------------------------------------------
 // Runtime data (fetched once on first crypt5 call)
 // ---------------------------------------------------------------------------
-let _selectors = null;
-let _expandedKeys = null;
-const _forgePkcs8KeyCache = new Map();
-const SELECTOR_TAIL_OFFSETS_BY_LENGTH_MOD_4 = [
-  [-2, -1, -4, -3],
-  [-2, -5, -4, -1],
-  [-6, -5, -2, -1],
-  [-6, -3, -2, -1],
-];
+let _crypt5Keys = null;
+const _forgeKeyCache = new Map();
 
-async function loadData() {
-  if (_selectors && _expandedKeys) return;
+async function loadCrypt5Keys() {
+  if (_crypt5Keys) return _crypt5Keys;
   const base = import.meta.env.BASE_URL;
-  [_selectors, _expandedKeys] = await Promise.all([
-    fetch(`${base}data/selectors.json`).then((r) => {
-      if (!r.ok) throw new Error(`Failed to fetch selectors.json: ${r.status}`);
-      return r.json();
-    }),
-    fetch(`${base}data/expanded_rsa_keys.json`).then((r) => {
-      if (!r.ok) throw new Error(`Failed to fetch expanded_rsa_keys.json: ${r.status}`);
-      return r.json();
-    }),
-  ]);
+  const r = await fetch(`${base}data/expanded_rsa_keys.json`);
+  if (!r.ok) throw new Error(`Failed to fetch expanded_rsa_keys.json: ${r.status}`);
+  _crypt5Keys = await r.json();
+  return _crypt5Keys;
 }
 
 // ---------------------------------------------------------------------------
@@ -76,28 +62,17 @@ function b64DecodeUrlSafe(s) {
   return Uint8Array.from(atob(s), (c) => c.charCodeAt(0));
 }
 
-/** Uint8Array → Latin-1 string (needed for node-forge byte buffers) */
+/** Uint8Array → Latin-1 string (node-forge's byte-buffer convention) */
 function uint8ToLatinStr(arr) {
   let s = '';
   for (let i = 0; i < arr.length; i++) s += String.fromCharCode(arr[i]);
   return s;
 }
 
-/** Latin-1 byte string from node-forge → Uint8Array */
+/** Latin-1 byte string → Uint8Array */
 function latinStrToUint8(str) {
   const out = new Uint8Array(str.length);
   for (let i = 0; i < str.length; i++) out[i] = str.charCodeAt(i) & 0xff;
-  return out;
-}
-
-function concatUint8Arrays(chunks) {
-  const total = chunks.reduce((sum, chunk) => sum + chunk.length, 0);
-  const out = new Uint8Array(total);
-  let offset = 0;
-  for (const chunk of chunks) {
-    out.set(chunk, offset);
-    offset += chunk.length;
-  }
   return out;
 }
 
@@ -106,130 +81,70 @@ function concatUint8Arrays(chunks) {
 // ---------------------------------------------------------------------------
 
 /**
- * Block-pair swap permutation.
- * For each output position j (1-indexed):
- *   k = (j-1) ÷ 4,  p = (j-1) mod 4
- *   source = 4k + (p+2) mod 4
- * Net effect: every 4-char block ABCD → CDAB (two 2-char pairs swapped).
+ * Whole-string CDAB permutation: every full 4-char block ABCD → CDAB.
+ * Trailing 1-3 bytes are passed through unchanged (matches Rust's permute4).
  */
-function blockPairSwap(region, length = region.length) {
-  const result = [];
-  for (let offset = 0; offset < length; offset += 4) {
-    const blockLength = Math.min(4, length - offset);
-    const block = region.slice(offset, offset + blockLength);
-    if (blockLength === 4) {
-      result.push(block.slice(2) + block.slice(0, 2));
-      continue;
-    }
-
-    const shift = 2 % blockLength;
-    result.push(block.slice(shift) + block.slice(0, shift));
+function blockPairSwap(s) {
+  const fullLen = s.length - (s.length % 4);
+  let out = '';
+  for (let offset = 0; offset < fullLen; offset += 4) {
+    out += s.slice(offset + 2, offset + 4) + s.slice(offset, offset + 2);
   }
-  return result.join('');
-}
-
-function extractNonce(payload) {
-  const n = payload.slice(4, 16);
-  return n[2] + n[3] + n[0] + n[1] + n[6] + n[7] + n[4] + n[5] + n[10] + n[11] + n[8] + n[9];
-}
-
-function parseCrypt5Header(payload) {
-  const header = blockPairSwap(payload.slice(16, 20));
-  const match = header.match(/^(\d+)(.*)$/);
-  if (!match) throw new Error(`Invalid crypt5 header: ${header}`);
-
-  const N = Number.parseInt(match[1], 10);
-  const remainder = match[2];
-  return {
-    N,
-    // The first non-digit is a marker; any remaining chars prefix the decoded URL field.
-    urlPrefix: remainder.slice(1),
-  };
-}
-
-function extractCrypt5Fields(payload, N, urlPrefix) {
-  const urlFull = blockPairSwap(payload.slice(20, 20 + N));
-  const carryLength = urlPrefix.length;
-  const urlB64 = urlPrefix + urlFull.slice(0, N - carryLength);
-  const carry = urlFull.slice(N - carryLength);
-  const encFull = blockPairSwap(payload.slice(20 + N, 20 + N + 684));
-
-  return {
-    urlB64,
-    encStr: carry + encFull.slice(0, 684 - carryLength),
-  };
-}
-
-// ---------------------------------------------------------------------------
-// Selector derivation
-// ---------------------------------------------------------------------------
-// This matches the Android app's exact selector extraction after the Java-side
-// 6-character chunk shuffle. In raw link space the tail bytes follow a fixed
-// length-mod-4 rule; they are not chosen by probing multiple layouts.
-function deriveSelector(payload) {
-  const prefix = payload[2] + payload[3] + payload[0] + payload[1]
-  const tailOffsets = SELECTOR_TAIL_OFFSETS_BY_LENGTH_MOD_4[payload.length % 4]
-  return prefix + tailOffsets.map((offset) => payload[payload.length + offset]).join('')
-}
-
-async function getExpandedRsaKey(selector) {
-  await loadData();
-
-  for (const [starts, mid, ends] of _selectors) {
-    if (selector.startsWith(starts) && selector.slice(2, 6) === mid && selector.endsWith(ends)) {
-      const key = _expandedKeys[starts + mid + ends]
-      if (key) return key
-      break
-    }
-  }
-
-  throw new Error(`No RSA key found for selector: ${selector}`)
+  return out + s.slice(fullLen);
 }
 
 // ---------------------------------------------------------------------------
 // RSA helpers (node-forge)
 // ---------------------------------------------------------------------------
 
-function loadForgePkcs8Key(pkcs8B64) {
-  const cached = _forgePkcs8KeyCache.get(pkcs8B64);
+// header: "PRIVATE KEY" for PKCS#8, "RSA PRIVATE KEY" for PKCS#1.
+function loadForgeKey(b64, header) {
+  const cached = _forgeKeyCache.get(b64);
   if (cached) return cached;
 
-  const lines = pkcs8B64.replace(/\s/g, '').match(/.{1,64}/g).join('\n');
-  const pem = `-----BEGIN PRIVATE KEY-----\n${lines}\n-----END PRIVATE KEY-----`;
+  const lines = b64.replace(/\s/g, '').match(/.{1,64}/g).join('\n');
+  const pem = `-----BEGIN ${header}-----\n${lines}\n-----END ${header}-----`;
   const key = forge.pki.privateKeyFromPem(pem);
-  _forgePkcs8KeyCache.set(pkcs8B64, key);
+  _forgeKeyCache.set(b64, key);
   return key;
 }
 
-function loadForgePkcs1Key(pkcs1B64) {
-  const lines = pkcs1B64.replace(/\s/g, '').match(/.{1,64}/g).join('\n');
-  const pem = `-----BEGIN RSA PRIVATE KEY-----\n${lines}\n-----END RSA PRIVATE KEY-----`;
-  return forge.pki.privateKeyFromPem(pem);
-}
-
-function forgeRsaDecrypt(privateKey, cipherBytes) {
-  return privateKey.decrypt(uint8ToLatinStr(cipherBytes), 'RSAES-PKCS1-V1_5');
+function rsaDecrypt(privateKey, cipherBytes) {
+  return privateKey.decrypt(uint8ToLatinStr(cipherBytes));
 }
 
 // ---------------------------------------------------------------------------
 // Crypt5 pipeline
 // ---------------------------------------------------------------------------
 async function decryptCrypt5(payload) {
-  const { N, urlPrefix } = parseCrypt5Header(payload)
-  const nonceStr = extractNonce(payload)
-  const { urlB64, encStr } = extractCrypt5Fields(payload, N, urlPrefix)
+  const shuffled = blockPairSwap(payload)
+  if (shuffled.length < 8) throw new Error('crypt5 payload too short')
 
-  const selector = deriveSelector(payload)
-  const rsaKeyB64 = await getExpandedRsaKey(selector)
-  const privateKey = loadForgePkcs8Key(rsaKeyB64)
-  const cipherBytes = b64DecodeUrlSafe(encStr)
-  const rsaPlainStr = forgeRsaDecrypt(privateKey, cipherBytes)
+  const marker = shuffled.slice(0, 4) + shuffled.slice(-4)
+  const body = shuffled.slice(4, -4)
+  if (body.length < 13) throw new Error('crypt5 body too short')
+
+  const nonceStr = body.slice(0, 12)
+  const rest = body.slice(12)
+  const digitMatch = rest.match(/^(\d+)/)
+  if (!digitMatch) throw new Error('crypt5 segment length missing')
+  const segmentLen = Number.parseInt(digitMatch[1], 10)
+  const packed = rest.slice(digitMatch[1].length)
+  if (packed.length < 1 + segmentLen) throw new Error('crypt5 segment truncated')
+
+  const urlB64 = packed.slice(1, 1 + segmentLen)
+  const encStr = packed.slice(1 + segmentLen)
+
+  const keys = await loadCrypt5Keys()
+  const rsaKeyB64 = keys[marker]
+  if (!rsaKeyB64) throw new Error(`No RSA key found for marker: ${marker}`)
+
+  const privateKey = loadForgeKey(rsaKeyB64, 'PRIVATE KEY')
+  const rsaPlainStr = rsaDecrypt(privateKey, b64DecodeUrlSafe(encStr))
 
   const chachaKey = b64DecodeUrlSafe(swapPairs(rsaPlainStr))
   const nonce = new TextEncoder().encode(nonceStr)
-  const ciphertext = b64DecodeUrlSafe(urlB64)
-  const chacha = chacha20poly1305(chachaKey, nonce)
-  const intermediate = chacha.decrypt(ciphertext)
+  const intermediate = chacha20poly1305(chachaKey, nonce).decrypt(b64DecodeUrlSafe(urlB64))
 
   // swapPairs(intermediate) → base64-decode → final URL
   const intermediateStr = new TextDecoder().decode(intermediate)
@@ -240,16 +155,15 @@ async function decryptCrypt5(payload) {
 // Crypt1–4 pipeline
 // ---------------------------------------------------------------------------
 async function decryptCrypt1to4(ordinal, payload) {
-  const privateKey = loadForgePkcs1Key(PKCS1_KEYS_B64[ordinal]);
+  const privateKey = loadForgeKey(PKCS1_KEYS_B64[ordinal], 'RSA PRIVATE KEY');
   const keySize = Math.ceil(privateKey.n.bitLength() / 8);
   const cipherBytes = b64DecodeUrlSafe(payload);
 
-  const plaintextChunks = [];
+  let plaintext = '';
   for (let i = 0; i < cipherBytes.length; i += keySize) {
-    const decrypted = forgeRsaDecrypt(privateKey, cipherBytes.slice(i, i + keySize));
-    plaintextChunks.push(latinStrToUint8(decrypted));
+    plaintext += rsaDecrypt(privateKey, cipherBytes.slice(i, i + keySize));
   }
-  return new TextDecoder().decode(concatUint8Arrays(plaintextChunks));
+  return new TextDecoder().decode(latinStrToUint8(plaintext));
 }
 
 // ---------------------------------------------------------------------------

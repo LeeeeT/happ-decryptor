@@ -9,7 +9,7 @@ The app runs entirely client-side and supports all currently bundled formats:
 
 - Local decryption in the browser
 - Support for legacy RSA-wrapped links and current `crypt5` links
-- 34 bundled crypt5 RSA keys and selector conditions generated from the current APK snapshot
+- 34 bundled crypt5 RSA keys generated from the current APK snapshot
 - Static compatibility data committed in `public/data/`
 - No APK processing, native emulation, or external services required at runtime
 

@@ -35,7 +35,7 @@
     <div class="header-status">
       <span class="badge">crypt · crypt2 · crypt3 · crypt4 · crypt5</span>
       <div class="status-row">
-        <span class="status-chip">Last Updated · May 10 2026</span>
+        <span class="status-chip">Last Updated · May 12 2026</span>
         <a class="github-link" href="https://github.com/LeeeeT/happ-decryptor" target="_blank" rel="noopener noreferrer">
           <svg viewBox="0 0 24 24" aria-hidden="true" width="22" height="22" fill="currentColor"><path d="M12 2C6.477 2 2 6.484 2 12.017c0 4.425 2.865 8.18 6.839 9.504.5.092.682-.217.682-.483 0-.237-.008-.868-.013-1.703-2.782.605-3.369-1.343-3.369-1.343-.454-1.158-1.11-1.466-1.11-1.466-.908-.62.069-.608.069-.608 1.003.07 1.531 1.032 1.531 1.032.892 1.53 2.341 1.088 2.91.832.092-.647.35-1.088.636-1.338-2.22-.253-4.555-1.113-4.555-4.951 0-1.093.39-1.988 1.029-2.688-.103-.253-.446-1.272.098-2.65 0 0 .84-.27 2.75 1.026A9.564 9.564 0 0 1 12 6.844a9.59 9.59 0 0 1 2.504.337c1.909-1.296 2.747-1.027 2.747-1.027.546 1.379.202 2.398.1 2.651.64.7 1.028 1.595 1.028 2.688 0 3.848-2.339 4.695-4.566 4.942.359.31.678.921.678 1.856 0 1.338-.012 2.419-.012 2.747 0 .268.18.58.688.482A10.02 10.02 0 0 0 22 12.017C22 6.484 17.522 2 12 2z"/></svg>
           View on GitHub
@@ -128,8 +128,8 @@
         </p>
         <div class="writeup-meta">
           <span>5 generations</span>
-          <span>34 selector entries</span>
-          <span>Payload-derived selector</span>
+          <span>34 crypt5 marker keys</span>
+          <span>Payload-derived marker</span>
           <span>Local browser runtime</span>
         </div>
       </header>
@@ -179,31 +179,26 @@
       <p>
         <code>crypt5</code> is the format that required actual reverse
         engineering. Its decryption path combines a custom wire format,
-        selector-based RSA key lookup, RSA-PKCS1v15 for key unwrapping, and
+        marker-based RSA key lookup, RSA-PKCS1v15 for key unwrapping, and
         ChaCha20-Poly1305 for the final URL ciphertext.
       </p>
 
       <h4>Payload Obfuscation: The Block-Pair Swap</h4>
       <p>
-        Before any cryptography can happen, the payload fields must be decoded
-        from their wire order. The transform used throughout the payload is a
-        fixed permutation we call the <em>block-pair swap</em>. For each output
-        position <em>j</em> (1-indexed) within a region:
+        The whole payload is shipped through a single fixed permutation we
+        call the <em>block-pair swap</em>. Every full 4-character block rotates
+        by two characters (<code>ABCD → CDAB</code>); any 1–3 byte tail passes
+        through unchanged. The transform is its own inverse, so encoding and
+        decoding use the same operation. Decoding the payload starts with one
+        invocation across the entire string:
       </p>
-      <pre><code>k      = (j - 1) / 4
-p      = (j - 1) mod 4
-source = 4*k + (p + 2) mod 4</code></pre>
-      <p>
-        In practice, every 4-character block rotates by two characters:
-        <code>ABCD → CDAB</code>. The transform is its own inverse, so encoding
-        and decoding use the same operation.
-      </p>
+      <pre><code>shuffled = blockPairSwap(payload)</code></pre>
 
       <h4>Payload Structure</h4>
       <p>
-        The verified <code>crypt5</code> payload layout is shown below. These
-        offsets were recovered by tracing how controlled payload changes affect
-        the downstream decrypt buffers.
+        After that single shuffle, the structure of <code>shuffled</code> falls
+        out by direct slicing. There is no per-field swap and no carry between
+        adjacent fields:
       </p>
       <div class="table-wrap">
       <table class="layout-table">
@@ -211,66 +206,44 @@ source = 4*k + (p + 2) mod 4</code></pre>
           <tr><th>Offset</th><th>Length</th><th>Field</th></tr>
         </thead>
         <tbody>
-          <tr><td>0</td><td>4</td><td>Variable leading quartet; these four characters feed the selector prefix as <code>payload[2] + payload[3] + payload[0] + payload[1]</code></td></tr>
-          <tr><td>4</td><td>12</td><td>Encoded nonce — three 4-char blocks, each block-pair-swapped</td></tr>
-          <tr><td>16</td><td>4</td><td>Header block; after <code>blockPairSwap</code> it becomes <code>&lt;decimal N&gt;&lt;marker&gt;&lt;optional url prefix&gt;</code>. Two-digit <code>N</code> leaves one URL-prefix character in the header; three-digit <code>N</code> consumes the full block.</td></tr>
-          <tr><td>20</td><td><em>N</em></td><td>URL region; undoing the block-pair swap across the full region yields the main URL ciphertext. If the header contributed a URL-prefix character, that prefix is prepended and the same number of trailing transformed characters are carried into the RSA field.</td></tr>
-          <tr><td>20+<em>N</em></td><td>684</td><td>RSA field; undoing the block-pair swap across all 684 characters yields the RSA ciphertext. When a carried byte exists from the URL region, it replaces the same number of trailing transformed characters so <code>enc_str</code> stays 684 characters long.</td></tr>
-          <tr><td>end</td><td>≥3</td><td>Variable suffix; legacy payloads use the older suffix-relative selector tail, while longer payloads can encode the selector tail in the final 4-character block.</td></tr>
+          <tr><td>0</td><td>4</td><td>First half of the 8-character marker (RSA key id)</td></tr>
+          <tr><td>4</td><td>12</td><td>ChaCha20 nonce</td></tr>
+          <tr><td>16</td><td><em>d</em> ≥ 1</td><td>ASCII decimal digits — length <code>N</code> of the URL segment</td></tr>
+          <tr><td>16+<em>d</em></td><td>1</td><td>Internal marker byte (discarded)</td></tr>
+          <tr><td>17+<em>d</em></td><td><em>N</em></td><td>URL ciphertext, Base64</td></tr>
+          <tr><td>17+<em>d</em>+<em>N</em></td><td>varies</td><td>RSA ciphertext, Base64 — fills the gap to the last 4 chars (684 for RSA-4096, 344 for RSA-2048, etc.)</td></tr>
+          <tr><td>end−4</td><td>4</td><td>Second half of the marker</td></tr>
         </tbody>
       </table>
       </div>
       <p>
-        Nonce extraction applies the pair swap across three 4-character blocks
-        in <code>payload[4:16]</code>:
+        Parsing is a straightforward sequence:
       </p>
-      <pre><code>n     = payload[4:16]
-nonce = n[2:4] + n[0:2] + n[6:8] + n[4:6] + n[10:12] + n[8:10]</code></pre>
+      <pre><code>shuffled = blockPairSwap(payload)
+marker   = shuffled[:4] + shuffled[-4:]
+body     = shuffled[4:-4]
+
+nonce    = body[:12]
+N, d     = parse_leading_decimal(body[12:])
+packed   = body[12 + d:]
+url_b64  = packed[1 : 1 + N]            # skip 1 marker byte
+enc_str  = packed[1 + N:]               # RSA Base64 fills the remainder</code></pre>
       <p>
-        The other two parsed fields are reconstructed as:
+        Reading <code>N</code> from a digit run rather than a fixed-size header
+        block lets any size of URL segment ride through, including 4-digit
+        values. Sizing the RSA segment as <em>rest of body</em> rather than a
+        hardcoded 684 chars keeps the parser correct if a key uses a different
+        modulus.
       </p>
-      <pre><code>header     = blockPairSwap(payload[16:20])
-digits     = leading decimal run in header
-suffix     = header[len(digits):]          # marker + optional url prefix
-url_prefix = suffix[1:]
 
-url_full   = blockPairSwap(payload[20:20+N])
-url_b64    = url_prefix + url_full[:N - len(url_prefix)]
-
-carry      = url_full[N - len(url_prefix):]
-enc_full   = blockPairSwap(payload[20+N:20+N+684])
-enc_str    = carry + enc_full[:684 - len(carry)]</code></pre>
+      <h4>Marker Derivation</h4>
       <p>
-        The fully reconstructed <code>enc_str</code> is the 684-character Base64
-        RSA ciphertext. The raw payload can still contain internal
-        <code>==</code> runs, but those live inside the URL region for the long
-        3-digit-<code>N</code> variant rather than acting as an RSA delimiter.
+        The 8-character marker is the first and last quartets of the shuffled
+        string concatenated together. It is used directly as a key into the
+        bundled 34-entry RSA key table:
       </p>
-
-      <h4>Selector Derivation</h4>
-      <p>
-        Native tracing shows that selector derivation is exact and depends only
-        on the payload bytes. The prefix is fixed, while the tail follows a
-        4-case pattern keyed by <code>payload.length mod 4</code>:
-      </p>
-      <pre><code>prefix = payload[2] + payload[3] + payload[0] + payload[1]
-
-tail_offsets_by_length_mod_4 = {
-  0: [-2, -1, -4, -3],
-  1: [-2, -5, -4, -1],
-  2: [-6, -5, -2, -1],
-  3: [-6, -3, -2, -1],
-}
-
-tail_offsets = tail_offsets_by_length_mod_4[payload.length mod 4]
-selector = prefix + payload[tail_offsets[0]] + ... + payload[tail_offsets[3]]</code></pre>
-      <p>
-        That 8-character selector is then matched exactly against the 34 stored
-        condition tuples <code>(starts, mid, ends)</code> to choose the RSA key.
-      </p>
-      <pre><code>selector.startswith(starts)   # first 2 chars
-selector[2:6] == mid          # middle 4 chars
-selector.endswith(ends)       # last 2 chars</code></pre>
+      <pre><code>marker   = shuffled[:4] + shuffled[-4:]
+rsa_key  = crypt5_keys[marker]</code></pre>
 
       <h4>Key Expansion And Reconstruction</h4>
       <p>
@@ -291,23 +264,21 @@ selector.endswith(ends)       # last 2 chars</code></pre>
       <h3>The Full <code>crypt5</code> Decryption Pipeline</h3>
       <div class="pipeline"><span class="label">crypt5 URI payload</span>
     ├─ strip <span class="comment">happ://crypt5/</span>
-    ├─ decode header = blockPairSwap(payload[16:20])
-    ├─ parse N from the header's leading decimal run
-    ├─ decode nonce from payload[4:16]
-    │  └─ pair-swap across three blocks → <span class="label">12-byte ChaCha nonce</span>
-    ├─ url_region = payload[20:20+N]
-    ├─ url_full = blockPairSwap(url_region)
-    ├─ url_prefix = header[len(decimal run)+1:]
-    ├─ url_b64 = url_prefix + url_full[:N - len(url_prefix)]
-    │  └─ yields <span class="label">Base64 URL ciphertext</span>
-    ├─ carry = url_full[N - len(url_prefix):]
-    ├─ enc_full = blockPairSwap(payload[20+N:20+N+684])
-    ├─ enc_str = carry + enc_full[:684 - len(carry)]
-    │  └─ yields <span class="label">684-char encoded RSA field</span>
-    ├─ base64-decode → <span class="label">512-byte RSA ciphertext</span>
-    ├─ derive selector from payload[2,3,0,1] plus the length-mod-4 tail rule
-    ├─ match selector against the bundled condition table
-    ├─ load bundled PKCS#8 RSA-4096 private key
+    ├─ shuffled = blockPairSwap(payload)
+    ├─ marker = shuffled[:4] + shuffled[-4:]
+    │  └─ <span class="label">8-char RSA key id</span>
+    ├─ body = shuffled[4:-4]
+    ├─ nonce = body[:12]
+    │  └─ <span class="label">12-byte ChaCha nonce</span>
+    ├─ N = parse leading decimal in body[12:]
+    ├─ skip 1 marker byte
+    ├─ url_b64 = next N chars
+    │  └─ <span class="label">Base64 URL ciphertext</span>
+    ├─ enc_str = remaining body chars
+    │  └─ <span class="label">Base64 RSA field (684 chars for RSA-4096)</span>
+    ├─ base64-decode → <span class="label">RSA ciphertext (512 bytes for RSA-4096)</span>
+    ├─ look marker up in the bundled 34-key table
+    ├─ load bundled PKCS#8 RSA private key
     ├─ RSA-PKCS1v15.decrypt(ciphertext, key)
     │  └─ returns <span class="label">44-char Base64 string</span>
     ├─ swapPairs(rsa_plaintext)
@@ -322,10 +293,11 @@ selector.endswith(ends)       # last 2 chars</code></pre>
       <p>
         Two different string transforms appear in this pipeline and must not be
         confused. <em>blockPairSwap</em> operates on each 4-character block and
-        swaps the two 2-character halves (<code>ABCD → CDAB</code>); it decodes
-        the wire-format payload fields. <em>swapPairs</em> operates over the full
-        string and swaps every adjacent pair (<code>ABCD → BADC</code>); it is
-        applied to the RSA plaintext and the ChaCha output before Base64 decode.
+        swaps the two 2-character halves (<code>ABCD → CDAB</code>); it is
+        applied once to the whole payload to recover the wire layout.
+        <em>swapPairs</em> operates over the full string and swaps every
+        adjacent pair (<code>ABCD → BADC</code>); it is applied to the RSA
+        plaintext and the ChaCha output before Base64 decode.
       </p>
 
       <h3>Browser Implementation</h3>
@@ -337,9 +309,10 @@ selector.endswith(ends)       # last 2 chars</code></pre>
         <li><strong>ChaCha20-Poly1305</strong> uses <a href="https://github.com/paulmillr/noble-ciphers" target="_blank" rel="noopener">@noble/ciphers</a>.</li>
       </ul>
       <p>
-        The selector table and expanded PKCS#8 keys are bundled in
-        <code>public/data/</code>, so the complete decrypt path runs locally in
-        the browser without APK assets, native bindings, or server-side help.
+        The 34 expanded PKCS#8 keys, indexed by marker, are bundled in
+        <code>public/data/expanded_rsa_keys.json</code>, so the complete decrypt
+        path runs locally in the browser without APK assets, native bindings,
+        or server-side help.
       </p>
 
     </article>
