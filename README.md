@@ -7,7 +7,7 @@ The app runs entirely client-side and supports all currently bundled formats:
 
 ## Highlights
 
-- Decryption happens locally in the browser — no server, no APK processing
+- Decryption happens locally in the browser — no server
 - Legacy RSA-wrapped links (`crypt`–`crypt4`) decrypt directly in JavaScript
 - `crypt5` runs the original native library (`liberror-code.so`) in-browser via
   CPU emulation, so the obfuscated key derivation stays correct across app versions
