@@ -1,19 +1,22 @@
 /**
- * Happ deep-link decryptor — pure JavaScript, client-side only.
+ * Happ deep-link decryptor — client-side only, no server.
  *
  * Supports:  happ://crypt/…   happ://crypt2/…  happ://crypt3/…
  *            happ://crypt4/…  happ://crypt5/…
  *
- * Dependencies (npm, bundled by Vite):
- *   node-forge  → RSA PKCS1v15 decrypt
- *   @noble/ciphers → ChaCha20-Poly1305 decrypt
+ *   crypt1–4  decrypt directly in JS via node-forge (RSA PKCS1v15).
+ *   crypt5    runs the native liberror-code.so (marker→RSA key, raw RSA-4096,
+ *             key derivation, ChaCha20-Poly1305) in-browser via CPU emulation;
+ *             see src/emu/. The JS side only applies the m4831f / m4842j
+ *             string transforms around the emulated core.
  *
- * Runtime data (served from /public/data/, fetched on first crypt5 call):
- *   data/expanded_rsa_keys.json  – { "marker": "base64-PKCS8-key", … }
+ * Runtime data (served from /public/, fetched on first crypt5 call):
+ *   emu/liberror-code.so, emu/unicorn_aarch64.js, emu/unicorn-wrapper.js
+ *   data/keytable.json  – { "marker": "base64-PKCS8-key", … }
  */
 
-import { chacha20poly1305 } from '@noble/ciphers/chacha.js';
 import forge from 'node-forge';
+import { getNativeDecryptor } from './emu/decryptor.js';
 
 // ---------------------------------------------------------------------------
 // Embedded PKCS1 RSA private keys for crypt1–crypt4 (base64, no headers)
@@ -32,17 +35,7 @@ const PKCS1_KEYS_B64 = [
 // ---------------------------------------------------------------------------
 // Runtime data (fetched once on first crypt5 call)
 // ---------------------------------------------------------------------------
-let _crypt5Keys = null;
 const _forgeKeyCache = new Map();
-
-async function loadCrypt5Keys() {
-  if (_crypt5Keys) return _crypt5Keys;
-  const base = import.meta.env.BASE_URL;
-  const r = await fetch(`${base}data/expanded_rsa_keys.json`);
-  if (!r.ok) throw new Error(`Failed to fetch expanded_rsa_keys.json: ${r.status}`);
-  _crypt5Keys = await r.json();
-  return _crypt5Keys;
-}
 
 // ---------------------------------------------------------------------------
 // String / byte helpers
@@ -80,19 +73,6 @@ function latinStrToUint8(str) {
 // Crypt5 payload parsing
 // ---------------------------------------------------------------------------
 
-/**
- * Whole-string CDAB permutation: every full 4-char block ABCD → CDAB.
- * Trailing 1-3 bytes are passed through unchanged (matches Rust's permute4).
- */
-function blockPairSwap(s) {
-  const fullLen = s.length - (s.length % 4);
-  let out = '';
-  for (let offset = 0; offset < fullLen; offset += 4) {
-    out += s.slice(offset + 2, offset + 4) + s.slice(offset, offset + 2);
-  }
-  return out + s.slice(fullLen);
-}
-
 // ---------------------------------------------------------------------------
 // RSA helpers (node-forge)
 // ---------------------------------------------------------------------------
@@ -116,39 +96,33 @@ function rsaDecrypt(privateKey, cipherBytes) {
 // ---------------------------------------------------------------------------
 // Crypt5 pipeline
 // ---------------------------------------------------------------------------
+/** 6-block shuffle [1,3,5,0,2,4] (m4831f) applied to the path segment. */
+function m4831f(s) {
+  const full = s.length - (s.length % 6);
+  let out = '';
+  for (let i = 0; i < full; i += 6) {
+    const b = s.slice(i, i + 6);
+    out += b[1] + b[3] + b[5] + b[0] + b[2] + b[4];
+  }
+  return out + s.slice(full);
+}
+
+/**
+ * Current Happ crypt5 format. The proprietary RSA + key-derivation + ChaCha
+ * stage is implemented by the native lib `liberror-code.so`, which we run
+ * in-browser via CPU emulation (see src/emu/). The outer pipeline is plain JS:
+ *
+ *   URL = base64decode( m4842j( native_c( m4831f(payload) ) ) )
+ */
 async function decryptCrypt5(payload) {
-  const shuffled = blockPairSwap(payload)
-  if (shuffled.length < 8) throw new Error('crypt5 payload too short')
-
-  const marker = shuffled.slice(0, 4) + shuffled.slice(-4)
-  const body = shuffled.slice(4, -4)
-  if (body.length < 13) throw new Error('crypt5 body too short')
-
-  const nonceStr = body.slice(0, 12)
-  const rest = body.slice(12)
-  const digitMatch = rest.match(/^(\d+)/)
-  if (!digitMatch) throw new Error('crypt5 segment length missing')
-  const segmentLen = Number.parseInt(digitMatch[1], 10)
-  const packed = rest.slice(digitMatch[1].length)
-  if (packed.length < 1 + segmentLen) throw new Error('crypt5 segment truncated')
-
-  const urlB64 = packed.slice(1, 1 + segmentLen)
-  const encStr = packed.slice(1 + segmentLen)
-
-  const keys = await loadCrypt5Keys()
-  const rsaKeyB64 = keys[marker]
-  if (!rsaKeyB64) throw new Error(`No RSA key found for marker: ${marker}`)
-
-  const privateKey = loadForgeKey(rsaKeyB64, 'PRIVATE KEY')
-  const rsaPlainStr = rsaDecrypt(privateKey, b64DecodeUrlSafe(encStr))
-
-  const chachaKey = b64DecodeUrlSafe(swapPairs(rsaPlainStr))
-  const nonce = new TextEncoder().encode(nonceStr)
-  const intermediate = chacha20poly1305(chachaKey, nonce).decrypt(b64DecodeUrlSafe(urlB64))
-
-  // swapPairs(intermediate) → base64-decode → final URL
-  const intermediateStr = new TextDecoder().decode(intermediate)
-  return new TextDecoder().decode(b64DecodeUrlSafe(swapPairs(intermediateStr)))
+  const nativeIn = m4831f(payload);
+  const decryptor = await getNativeDecryptor();
+  const outBytes = decryptor.decrypt(new TextEncoder().encode(nativeIn));
+  if (!outBytes || outBytes.length === 0) {
+    throw new Error('crypt5 decryption failed (unknown marker/key or malformed link)');
+  }
+  const obfuscated = new TextDecoder().decode(outBytes); // m4842j-obfuscated base64 of the URL
+  return new TextDecoder().decode(b64DecodeUrlSafe(swapPairs(obfuscated)));
 }
 
 // ---------------------------------------------------------------------------

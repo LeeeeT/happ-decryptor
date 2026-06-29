@@ -7,11 +7,12 @@ The app runs entirely client-side and supports all currently bundled formats:
 
 ## Highlights
 
-- Local decryption in the browser
-- Support for legacy RSA-wrapped links and current `crypt5` links
-- 34 bundled crypt5 RSA keys generated from the current APK snapshot
-- Static compatibility data committed in `public/data/`
-- No APK processing, native emulation, or external services required at runtime
+- Decryption happens locally in the browser — no server, no APK processing
+- Legacy RSA-wrapped links (`crypt`–`crypt4`) decrypt directly in JavaScript
+- `crypt5` runs the original native library (`liberror-code.so`) in-browser via
+  CPU emulation, so the obfuscated key derivation stays correct across app versions
+- An RSA-modexp fast path (JS `BigInt`) brings a `crypt5` decrypt down to ~2 s
+- 36 bundled `crypt5` marker keys + the emulation assets are committed under `public/`
 
 ## Development
 
@@ -22,15 +23,26 @@ npm run build
 npm run preview
 ```
 
-## Reverse Engineering Notes
+## How it works
 
-The detailed reverse-engineering log lives in the in-page write-up in [`index.html`](./index.html).
+- `src/decrypt.js` — top-level decode for every generation.
+- `src/emu/` — loads `liberror-code.so` onto [unicorn.js](https://github.com/AlexAltea/unicorn.js)
+  (Unicorn 2.1.4, asm.js) with a mock JNI/libc host, and runs the native `crypt5`
+  decrypt. Includes the `BN_mod_exp_mont` interception that does the RSA modular
+  exponentiation in JavaScript `BigInt`; if the bundled `.so` is ever replaced and
+  the interception target no longer matches, the library runs unmodified instead.
+- `public/emu/` — the native library + emulator; `public/data/keytable.json` — the
+  36 marker→key entries injected into the library exactly as the app does on-device.
+
+The detailed reverse-engineering write-up is in the in-page dossier
+([`index.html`](./index.html)).
 
 ## Runtime Dependencies
 
-- [`node-forge`](https://github.com/digitalbazaar/forge) for RSA PKCS#1 v1.5 decryption
-- [`@noble/ciphers`](https://github.com/paulmillr/noble-ciphers) for ChaCha20-Poly1305
+- [`node-forge`](https://github.com/digitalbazaar/forge) — RSA PKCS#1 v1.5
+  decryption for the legacy `crypt`–`crypt4` formats.
 
 ## Privacy
 
-Decryption happens locally in the browser tab. The app does not upload links or decrypted results to a server.
+Decryption happens locally in the browser tab. The app does not upload links or
+decrypted results to a server.

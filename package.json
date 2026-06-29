@@ -9,7 +9,6 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "@noble/ciphers": "^2.2.0",
     "node-forge": "^1.4.0"
   },
   "devDependencies": {

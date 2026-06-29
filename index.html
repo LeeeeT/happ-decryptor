@@ -92,7 +92,7 @@
       <ul class="signal-list">
         <li><span>GEN 1-4</span><strong>RSA-PKCS1v15 blocks</strong></li>
         <li><span>GEN 5</span><strong>RSA + ChaCha20-Poly1305</strong></li>
-        <li><span>DATA</span><strong>34 bundled crypt5 keys</strong></li>
+        <li><span>DATA</span><strong>36 bundled crypt5 keys</strong></li>
         <li><span>MODE</span><strong>Client-side only</strong></li>
       </ul>
       <div class="mini-pipeline">
@@ -128,7 +128,7 @@
         </p>
         <div class="writeup-meta">
           <span>5 generations</span>
-          <span>34 crypt5 marker keys</span>
+          <span>36 crypt5 marker keys</span>
           <span>Payload-derived marker</span>
           <span>Local browser runtime</span>
         </div>
@@ -140,9 +140,10 @@
         by a mobile application to wrap destination URLs in encrypted payloads.
         Instead of exposing a plain <code>https://</code> link, the app emits a
         payload that only the bundled client logic can decode. This project
-        reimplements that client-side logic in JavaScript and supports every
-        currently bundled generation: <code>crypt</code> through
-        <code>crypt5</code>.
+        reproduces that decode path entirely in the browser — in JavaScript for
+        the legacy RSA formats, and by emulating the original native library for
+        <code>crypt5</code> — across every currently bundled generation:
+        <code>crypt</code> through <code>crypt5</code>.
       </p>
 
       <h3>Generations 1–4: Hardcoded RSA Keys</h3>
@@ -175,144 +176,92 @@
       </p>
       <p>Each legacy private key is embedded directly in the application bytecode.</p>
 
-      <h3>Generation 5: Payload Layout And Native Keying</h3>
+      <h3>Generation 5: Native Keying via In-Browser Emulation</h3>
       <p>
         <code>crypt5</code> is the format that required actual reverse
-        engineering. Its decryption path combines a custom wire format,
-        marker-based RSA key lookup, RSA-PKCS1v15 for key unwrapping, and
-        ChaCha20-Poly1305 for the final URL ciphertext.
+        engineering. Its core — a marker-based RSA key lookup, a raw RSA-4096
+        decrypt, a proprietary 32-byte key derivation, and ChaCha20-Poly1305
+        for the URL ciphertext — lives inside a native Android library,
+        <code>liberror-code.so</code> (ARM64). That library is deliberately
+        obfuscated and anti-tamper hardened, and its internals shift between app
+        versions, which is what kept breaking earlier hand-ported decoders.
+      </p>
+      <p>
+        Rather than re-implement that moving target, the app <strong>runs the
+        real library in the browser</strong> on a CPU emulator
+        (<a href="https://github.com/AlexAltea/unicorn.js" target="_blank" rel="noopener">unicorn.js</a>,
+        Unicorn 2.1.4 shipped as self-contained asm.js). A small JavaScript host
+        loads the <code>.so</code>, supplies a mock JNI environment and libc, and
+        calls the same entry point the app uses
+        (<code>jniGetErrorMessageFromString2</code>). The cryptography is the
+        library's own code, executed instruction-for-instruction — so it stays
+        correct even where the logic is intentionally unreadable.
       </p>
 
-      <h4>Payload Obfuscation: The Block-Pair Swap</h4>
+      <h4>The JavaScript-Visible Pipeline</h4>
       <p>
-        The whole payload is shipped through a single fixed permutation we
-        call the <em>block-pair swap</em>. Every full 4-character block rotates
-        by two characters (<code>ABCD → CDAB</code>); any 1–3 byte tail passes
-        through unchanged. The transform is its own inverse, so encoding and
-        decoding use the same operation. Decoding the payload starts with one
-        invocation across the entire string:
+        Around the native core, only two reversible string transforms are
+        applied in JS. <em>m4831f</em> permutes each 6-character block by the
+        index pattern <code>[1,3,5,0,2,4]</code> (a 1–5 char tail passes through);
+        <em>m4842j</em> swaps every adjacent character pair
+        (<code>ABCD → BADC</code>). Everything between them — the wire layout,
+        nonce, RSA field, and AEAD — is parsed and decrypted inside the emulated
+        library, so the host never hand-parses the payload:
       </p>
-      <pre><code>shuffled = blockPairSwap(payload)</code></pre>
-
-      <h4>Payload Structure</h4>
-      <p>
-        After that single shuffle, the structure of <code>shuffled</code> falls
-        out by direct slicing. There is no per-field swap and no carry between
-        adjacent fields:
-      </p>
-      <div class="table-wrap">
-      <table class="layout-table">
-        <thead>
-          <tr><th>Offset</th><th>Length</th><th>Field</th></tr>
-        </thead>
-        <tbody>
-          <tr><td>0</td><td>4</td><td>First half of the 8-character marker (RSA key id)</td></tr>
-          <tr><td>4</td><td>12</td><td>ChaCha20 nonce</td></tr>
-          <tr><td>16</td><td><em>d</em> ≥ 1</td><td>ASCII decimal digits — length <code>N</code> of the URL segment</td></tr>
-          <tr><td>16+<em>d</em></td><td>1</td><td>Internal marker byte (discarded)</td></tr>
-          <tr><td>17+<em>d</em></td><td><em>N</em></td><td>URL ciphertext, Base64</td></tr>
-          <tr><td>17+<em>d</em>+<em>N</em></td><td>varies</td><td>RSA ciphertext, Base64 — fills the gap to the last 4 chars (684 for RSA-4096, 344 for RSA-2048, etc.)</td></tr>
-          <tr><td>end−4</td><td>4</td><td>Second half of the marker</td></tr>
-        </tbody>
-      </table>
-      </div>
-      <p>
-        Parsing is a straightforward sequence:
-      </p>
-      <pre><code>shuffled = blockPairSwap(payload)
-marker   = shuffled[:4] + shuffled[-4:]
-body     = shuffled[4:-4]
-
-nonce    = body[:12]
-N, d     = parse_leading_decimal(body[12:])
-packed   = body[12 + d:]
-url_b64  = packed[1 : 1 + N]            # skip 1 marker byte
-enc_str  = packed[1 + N:]               # RSA Base64 fills the remainder</code></pre>
-      <p>
-        Reading <code>N</code> from a digit run rather than a fixed-size header
-        block lets any size of URL segment ride through, including 4-digit
-        values. Sizing the RSA segment as <em>rest of body</em> rather than a
-        hardcoded 684 chars keeps the parser correct if a key uses a different
-        modulus.
-      </p>
-
-      <h4>Marker Derivation</h4>
-      <p>
-        The 8-character marker is the first and last quartets of the shuffled
-        string concatenated together. It is used directly as a key into the
-        bundled 34-entry RSA key table:
-      </p>
-      <pre><code>marker   = shuffled[:4] + shuffled[-4:]
-rsa_key  = crypt5_keys[marker]</code></pre>
-
-      <h4>Key Expansion And Reconstruction</h4>
-      <p>
-        The RSA material referenced by the app is stored in an obfuscated form.
-        The smali strings are not complete PKCS#8 private keys on their own; the
-        native path expands them via <code>sub_17b1d0</code> before the RSA
-        engine can consume them.
-      </p>
-      <p>
-        For the web build, that native expansion is performed offline. The raw
-        strings expose the RSA-CRT values <code>q</code>, <code>dp</code>,
-        <code>dq</code>, and <code>qi</code>. Recovering the missing prime
-        <code>p</code> from those fragments makes it possible to rebuild the full
-        RSA-4096 private key, serialize it as PKCS#8, and bundle the result as a
-        static JSON asset for the app's 34-key compatibility snapshot.
-      </p>
-
-      <h3>The Full <code>crypt5</code> Decryption Pipeline</h3>
       <div class="pipeline"><span class="label">crypt5 URI payload</span>
     ├─ strip <span class="comment">happ://crypt5/</span>
-    ├─ shuffled = blockPairSwap(payload)
-    ├─ marker = shuffled[:4] + shuffled[-4:]
-    │  └─ <span class="label">8-char RSA key id</span>
-    ├─ body = shuffled[4:-4]
-    ├─ nonce = body[:12]
-    │  └─ <span class="label">12-byte ChaCha nonce</span>
-    ├─ N = parse leading decimal in body[12:]
-    ├─ skip 1 marker byte
-    ├─ url_b64 = next N chars
-    │  └─ <span class="label">Base64 URL ciphertext</span>
-    ├─ enc_str = remaining body chars
-    │  └─ <span class="label">Base64 RSA field (684 chars for RSA-4096)</span>
-    ├─ base64-decode → <span class="label">RSA ciphertext (512 bytes for RSA-4096)</span>
-    ├─ look marker up in the bundled 34-key table
-    ├─ load bundled PKCS#8 RSA private key
-    ├─ RSA-PKCS1v15.decrypt(ciphertext, key)
-    │  └─ returns <span class="label">44-char Base64 string</span>
-    ├─ swapPairs(rsa_plaintext)
-    ├─ base64-decode → <span class="label">32-byte ChaCha20 key</span>
-    ├─ base64-decode(url_b64)
-    │  └─ yields <span class="label">ciphertext || 16-byte Poly1305 tag</span>
-    ├─ ChaCha20-Poly1305.decrypt(ciphertext, nonce, key)
-    │  └─ returns <span class="label">intermediate string</span>
-    ├─ swapPairs(intermediate)
+    ├─ nativeIn = m4831f(payload)        <span class="comment">// 6-char block shuffle [1,3,5,0,2,4]</span>
+    ├─ emulate liberror-code.so on the nativeIn bytes:
+    │     ├─ recover the 8-char marker, look up the RSA key (JNI getHelp)
+    │     ├─ raw RSA-4096 decrypt
+    │     ├─ derive the 32-byte ChaCha20 key
+    │     └─ ChaCha20-Poly1305 decrypt
+    │        └─ <span class="label">m4842j-obfuscated Base64 of the URL</span>
+    ├─ swapPairs(out)                    <span class="comment">// m4842j: ABCD → BADC</span>
     └─ base64-decode → <span class="label">final URL</span></div>
 
+      <h4>Marker → Key, Exactly As On-Device</h4>
       <p>
-        Two different string transforms appear in this pipeline and must not be
-        confused. <em>blockPairSwap</em> operates on each 4-character block and
-        swaps the two 2-character halves (<code>ABCD → CDAB</code>); it is
-        applied once to the whole payload to recover the wire layout.
-        <em>swapPairs</em> operates over the full string and swaps every
-        adjacent pair (<code>ABCD → BADC</code>); it is applied to the RSA
-        plaintext and the ChaCha output before Base64 decode.
+        The library does not hold its RSA keys; on the phone it asks the Java
+        layer for them through a JNI callback. The emulator answers that same
+        callback (<code>getHelp(marker)</code>) from a bundled
+        <strong>36-entry</strong> table, <code>public/data/keytable.json</code>,
+        mapping each marker to a Base64 PKCS#8 key. The key therefore enters the
+        library by the identical path it does in the real app — no offline key
+        reconstruction or PKCS#8 rebuilding is involved anymore.
+      </p>
+
+      <h4>Performance: Skipping the RSA Hot Spot</h4>
+      <p>
+        A full emulated decrypt is ~217M guest instructions, almost all of them
+        the RSA-4096 modular exponentiation, which takes roughly <strong>9 s</strong>
+        on the asm.js interpreter. The host intercepts OpenSSL's Montgomery
+        modexp, <code>BN_mod_exp_mont(rr, a, p, m, …)</code>, reads the
+        <code>(base, exp, modulus)</code> big integers at the call boundary,
+        computes <code>a<sup>p</sup> mod m</code> with native JavaScript
+        <code>BigInt</code>, writes the result back, and returns — replacing all
+        four RSA exponentiations and cutting the run to about <strong>2 s</strong>
+        with identical output.
+      </p>
+      <p>
+        Because OpenSSL is statically linked and stripped, that function has no
+        symbol; it was located by call-graph profiling and verified by checking,
+        per call, that the JavaScript result matches the value the native code
+        writes. The interception is trusted only when the function's prologue
+        bytes match and each call carries a valid RSA-shaped argument triple; on
+        any mismatch — for instance an updated <code>.so</code> — the app simply
+        runs the library unmodified (slower, but never wrong).
       </p>
 
       <h3>Browser Implementation</h3>
-      <p>
-        The browser implementation uses two cryptographic dependencies:
-      </p>
       <ul>
-        <li><strong>RSA-PKCS1v15 decryption</strong> uses <a href="https://github.com/digitalbazaar/forge" target="_blank" rel="noopener">node-forge</a>, because the Web Crypto API does not expose PKCS1v15 RSA decryption.</li>
-        <li><strong>ChaCha20-Poly1305</strong> uses <a href="https://github.com/paulmillr/noble-ciphers" target="_blank" rel="noopener">@noble/ciphers</a>.</li>
+        <li><strong>Generations 1–4</strong> decrypt directly in JavaScript with <a href="https://github.com/digitalbazaar/forge" target="_blank" rel="noopener">node-forge</a> (RSA-PKCS1v15; the Web Crypto API does not expose PKCS1v15 decryption).</li>
+        <li><strong>Generation 5</strong> runs <code>liberror-code.so</code> on <a href="https://github.com/AlexAltea/unicorn.js" target="_blank" rel="noopener">unicorn.js</a>. The library and emulator are bundled in <code>public/emu/</code>, and the 36 marker keys in <code>public/data/keytable.json</code>.</li>
       </ul>
       <p>
-        The 34 expanded PKCS#8 keys, indexed by marker, are bundled in
-        <code>public/data/expanded_rsa_keys.json</code>, so the complete decrypt
-        path runs locally in the browser without APK assets, native bindings,
-        or server-side help.
+        The complete decode path — including the native key derivation and
+        AEAD — runs locally in the browser tab, with no APK processing and no
+        server-side help.
       </p>
 
     </article>
