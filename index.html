@@ -35,7 +35,7 @@
     <div class="header-status">
       <span class="badge">crypt · crypt2 · crypt3 · crypt4 · crypt5</span>
       <div class="status-row">
-        <span class="status-chip">Last Updated · June 29 2026</span>
+        <span class="status-chip">Last Updated · July 15 2026</span>
         <a class="github-link" href="https://github.com/LeeeeT/happ-decryptor" target="_blank" rel="noopener noreferrer">
           <svg viewBox="0 0 24 24" aria-hidden="true" width="22" height="22" fill="currentColor"><path d="M12 2C6.477 2 2 6.484 2 12.017c0 4.425 2.865 8.18 6.839 9.504.5.092.682-.217.682-.483 0-.237-.008-.868-.013-1.703-2.782.605-3.369-1.343-3.369-1.343-.454-1.158-1.11-1.466-1.11-1.466-.908-.62.069-.608.069-.608 1.003.07 1.531 1.032 1.531 1.032.892 1.53 2.341 1.088 2.91.832.092-.647.35-1.088.636-1.338-2.22-.253-4.555-1.113-4.555-4.951 0-1.093.39-1.988 1.029-2.688-.103-.253-.446-1.272.098-2.65 0 0 .84-.27 2.75 1.026A9.564 9.564 0 0 1 12 6.844a9.59 9.59 0 0 1 2.504.337c1.909-1.296 2.747-1.027 2.747-1.027.546 1.379.202 2.398.1 2.651.64.7 1.028 1.595 1.028 2.688 0 3.848-2.339 4.695-4.566 4.942.359.31.678.921.678 1.856 0 1.338-.012 2.419-.012 2.747 0 .268.18.58.688.482A10.02 10.02 0 0 0 22 12.017C22 6.484 17.522 2 12 2z"/></svg>
           View on GitHub
@@ -140,10 +140,10 @@
         by a mobile application to wrap destination URLs in encrypted payloads.
         Instead of exposing a plain <code>https://</code> link, the app emits a
         payload that only the bundled client logic can decode. This project
-        reproduces that decode path entirely in the browser — in JavaScript for
-        the legacy RSA formats, and by emulating the original native library for
-        <code>crypt5</code> — across every currently bundled generation:
-        <code>crypt</code> through <code>crypt5</code>.
+        reproduces that decode path entirely in the browser across every bundled
+        generation, <code>crypt</code> through <code>crypt5</code>. JavaScript is
+        the default for every known layout; native emulation is retained as a
+        <code>crypt5</code> compatibility fallback.
       </p>
 
       <h3>Generations 1–4: Hardcoded RSA Keys</h3>
@@ -167,8 +167,8 @@
       </div>
 
       <p>
-        Decryption is symmetric: split the Base64 payload back into RSA-sized
-        blocks, decrypt each block independently, and concatenate the plaintext
+        To decrypt, the browser splits the Base64 payload back into RSA-sized
+        blocks, decrypts each block independently, and concatenates the plaintext
         fragments to recover the final URL. The implementation accepts both
         standard and URL-safe Base64 alphabets, so the browser path normalizes
         <code>-</code> and <code>_</code> and restores missing padding before
@@ -176,91 +176,68 @@
       </p>
       <p>Each legacy private key is embedded directly in the application bytecode.</p>
 
-      <h3>Generation 5: Native Keying via In-Browser Emulation</h3>
+      <h3>Generation 5: Direct RSA + ChaCha20-Poly1305</h3>
       <p>
-        <code>crypt5</code> is the format that required actual reverse
-        engineering. Its core — a marker-based RSA key lookup, a raw RSA-4096
-        decrypt, a proprietary 32-byte key derivation, and ChaCha20-Poly1305
-        for the URL ciphertext — lives inside a native Android library,
-        <code>liberror-code.so</code> (ARM64). That library is deliberately
-        obfuscated and anti-tamper hardened, and its internals shift between app
-        versions, which is what kept breaking earlier hand-ported decoders.
-      </p>
-      <p>
-        Rather than re-implement that moving target, the app <strong>runs the
-        real library in the browser</strong> on a CPU emulator
-        (<a href="https://github.com/AlexAltea/unicorn.js" target="_blank" rel="noopener">unicorn.js</a>,
-        Unicorn 2.1.4 shipped as self-contained asm.js). A small JavaScript host
-        loads the <code>.so</code>, supplies a mock JNI environment and libc, and
-        calls the same entry point the app uses
-        (<code>jniGetErrorMessageFromString2</code>). The cryptography is the
-        library's own code, executed instruction-for-instruction — so it stays
-        correct even where the logic is intentionally unreadable.
+        <code>crypt5</code> combines a payload-derived marker, RSA-4096 key
+        recovery, and authenticated ChaCha20-Poly1305 encryption. The browser
+        now parses and decrypts this format directly, avoiding ARM64 instruction
+        emulation during the normal path. Both the legacy body layout and the
+        newer salted/XOR layout are recognized automatically.
       </p>
 
-      <h4>The JavaScript-Visible Pipeline</h4>
+      <h4>Direct Pipeline</h4>
       <p>
-        Around the native core, only two reversible string transforms are
-        applied in JS. <em>m4831f</em> permutes each 6-character block by the
-        index pattern <code>[1,3,5,0,2,4]</code> (a 1–5 char tail passes through);
-        <em>m4842j</em> swaps every adjacent character pair
-        (<code>ABCD → BADC</code>). Everything between them — the wire layout,
-        nonce, RSA field, and AEAD — is parsed and decrypted inside the emulated
-        library, so the host never hand-parses the payload:
+        First, each complete four-character block has its halves swapped
+        (<code>ABCD → CDAB</code>); a short tail is left unchanged. The first and
+        last four characters of that result form an eight-character marker that
+        selects a PKCS#8 private key. The middle body holds a 12-byte nonce,
+        optional two-byte tag and eight-byte salt, a decimal segment length, a
+        one-byte separator, the Base64 ChaCha ciphertext, and the Base64 RSA
+        ciphertext.
+      </p>
+      <p>
+        In the legacy layout, the decimal length follows the nonce immediately.
+        The salted layout inserts the tag and salt first. The parser tries the
+        layout indicated by the first post-nonce byte, then tries the other
+        layout if any parse, RSA, authentication, or decode step fails.
       </p>
       <div class="pipeline"><span class="label">crypt5 URI payload</span>
-    ├─ strip <span class="comment">happ://crypt5/</span>
-    ├─ nativeIn = m4831f(payload)        <span class="comment">// 6-char block shuffle [1,3,5,0,2,4]</span>
-    ├─ emulate liberror-code.so on the nativeIn bytes:
-    │     ├─ recover the 8-char marker, look up the RSA key (JNI getHelp)
-    │     ├─ raw RSA-4096 decrypt
-    │     ├─ derive the 32-byte ChaCha20 key
-    │     └─ ChaCha20-Poly1305 decrypt
-    │        └─ <span class="label">m4842j-obfuscated Base64 of the URL</span>
-    ├─ swapPairs(out)                    <span class="comment">// m4842j: ABCD → BADC</span>
+    ├─ swap 4-byte block halves          <span class="comment">// ABCD → CDAB</span>
+    ├─ marker = first 4 + last 4 bytes
+    ├─ parse nonce + optional tag/salt + decimal segment length
+    ├─ RSA-PKCS1v15 decrypt → pair-swapped Base64 key text
+    ├─ swap adjacent bytes + Base64-decode → 32-byte RSA value
+    ├─ salted layout: value XOR repeated 8-byte salt → ChaCha key
+    ├─ ChaCha20-Poly1305 authenticate + decrypt
+    ├─ swap adjacent Base64 bytes        <span class="comment">// ABCD → BADC</span>
     └─ base64-decode → <span class="label">final URL</span></div>
 
-      <h4>Marker → Key, Exactly As On-Device</h4>
+      <h4>Compatibility Fallback</h4>
       <p>
-        The library does not hold its RSA keys; on the phone it asks the Java
-        layer for them through a JNI callback. The emulator answers that same
-        callback (<code>getHelp(marker)</code>) from a bundled
-        <strong>36-entry</strong> table, <code>public/data/keytable.json</code>,
-        mapping each marker to a Base64 PKCS#8 key. The key therefore enters the
-        library by the identical path it does in the real app — no offline key
-        reconstruction or PKCS#8 rebuilding is involved anymore.
-      </p>
-
-      <h4>Performance: Skipping the RSA Hot Spot</h4>
-      <p>
-        A full emulated decrypt is ~217M guest instructions, almost all of them
-        the RSA-4096 modular exponentiation, which takes roughly <strong>9 s</strong>
-        on the asm.js interpreter. The host intercepts OpenSSL's Montgomery
-        modexp, <code>BN_mod_exp_mont(rr, a, p, m, …)</code>, reads the
-        <code>(base, exp, modulus)</code> big integers at the call boundary,
-        computes <code>a<sup>p</sup> mod m</code> with native JavaScript
-        <code>BigInt</code>, writes the result back, and returns — replacing all
-        four RSA exponentiations and cutting the run to about <strong>2 s</strong>
-        with identical output.
+        Direct decryption and its PKCS#8 table are attempted first. If loading
+        that table, key lookup, parsing, RSA, authentication, or final decoding
+        fails, the app lazily loads the existing <code>liberror-code.so</code>
+        ARM64 emulator and retries the original native pipeline. Links handled
+        directly never fetch the native library or unicorn.js runtime and never
+        pay their CPU-emulation cost.
       </p>
       <p>
-        Because OpenSSL is statically linked and stripped, that function has no
-        symbol; it was located by call-graph profiling and verified by checking,
-        per call, that the JavaScript result matches the value the native code
-        writes. The interception is trusted only when the function's prologue
-        bytes match and each call carries a valid RSA-shaped argument triple; on
-        any mismatch — for instance an updated <code>.so</code> — the app simply
-        runs the library unmodified (slower, but never wrong).
+        The direct path uses <code>public/data/crypt5-keys.json</code> for its 36
+        PKCS#8 keys. The fallback retains <code>public/data/keytable.json</code>,
+        whose marker values are injected through the native library's JNI
+        callback exactly as before. It also retains the native path's outer
+        transforms: a six-character <code>[1,3,5,0,2,4]</code> shuffle before
+        emulation, followed by an adjacent-pair swap and Base64 decode of the
+        emulator's output.
       </p>
 
       <h3>Browser Implementation</h3>
       <ul>
         <li><strong>Generations 1–4</strong> decrypt directly in JavaScript with <a href="https://github.com/digitalbazaar/forge" target="_blank" rel="noopener">node-forge</a> (RSA-PKCS1v15; the Web Crypto API does not expose PKCS1v15 decryption).</li>
-        <li><strong>Generation 5</strong> runs <code>liberror-code.so</code> on <a href="https://github.com/AlexAltea/unicorn.js" target="_blank" rel="noopener">unicorn.js</a>. The library and emulator are bundled in <code>public/emu/</code>, and the 36 marker keys in <code>public/data/keytable.json</code>.</li>
+        <li><strong>Generation 5</strong> uses <a href="https://github.com/digitalbazaar/forge" target="_blank" rel="noopener">node-forge</a> for RSA and <a href="https://github.com/paulmillr/noble-ciphers" target="_blank" rel="noopener">noble-ciphers</a> for ChaCha20-Poly1305. <code>liberror-code.so</code> on <a href="https://github.com/AlexAltea/unicorn.js" target="_blank" rel="noopener">unicorn.js</a> is fetched only if the direct path fails.</li>
       </ul>
       <p>
-        The complete decode path — including the native key derivation and
-        AEAD — runs locally in the browser tab, with no server-side help.
+        Both decode paths run locally in the browser tab, with no server-side help.
       </p>
 
     </article>

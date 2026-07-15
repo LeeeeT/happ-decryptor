@@ -9,16 +9,17 @@ The app runs entirely client-side and supports all currently bundled formats:
 
 - Decryption happens locally in the browser — no server
 - Legacy RSA-wrapped links (`crypt`–`crypt4`) decrypt directly in JavaScript
-- `crypt5` runs the original native library (`liberror-code.so`) in-browser via
-  CPU emulation, so the obfuscated key derivation stays correct across app versions
-- An RSA-modexp fast path (JS `BigInt`) brings a `crypt5` decrypt down to ~2 s
-- 36 bundled `crypt5` marker keys + the emulation assets are committed under `public/`
+- `crypt5` decrypts directly with RSA + ChaCha20-Poly1305, including both the
+  legacy and newer salted/XOR layouts
+- The original native-library CPU emulator remains as an automatic fallback
+- 36 bundled `crypt5` marker keys + the fallback emulation assets are committed under `public/`
 
 ## Development
 
 ```bash
 npm install
 npm run dev
+npm test
 npm run build
 npm run preview
 ```
@@ -26,13 +27,13 @@ npm run preview
 ## How it works
 
 - `src/decrypt.js` — top-level decode for every generation.
-- `src/emu/` — loads `liberror-code.so` onto [unicorn.js](https://github.com/AlexAltea/unicorn.js)
-  (Unicorn 2.1.4, asm.js) with a mock JNI/libc host, and runs the native `crypt5`
-  decrypt. Includes the `BN_mod_exp_mont` interception that does the RSA modular
-  exponentiation in JavaScript `BigInt`; if the bundled `.so` is ever replaced and
-  the interception target no longer matches, the library runs unmodified instead.
-- `public/emu/` — the native library + emulator; `public/data/keytable.json` — the
-  36 marker→key entries injected into the library exactly as the app does on-device.
+- `src/crypt5.js` — lightweight direct `crypt5` parsing, RSA key recovery, salt/XOR
+  handling, and authenticated ChaCha20-Poly1305 decryption.
+- `src/emu/` — fallback that loads `liberror-code.so` onto
+  [unicorn.js](https://github.com/AlexAltea/unicorn.js) (Unicorn 2.1.4, asm.js) with
+  a mock JNI/libc host and its existing JavaScript `BigInt` RSA fast path.
+- `public/data/crypt5-keys.json` — PKCS#8 keys for direct decryption;
+  `public/data/keytable.json` — key strings used by the native fallback.
 
 The detailed reverse-engineering write-up is in the in-page dossier
 ([`index.html`](./index.html)).
@@ -40,7 +41,9 @@ The detailed reverse-engineering write-up is in the in-page dossier
 ## Runtime Dependencies
 
 - [`node-forge`](https://github.com/digitalbazaar/forge) — RSA PKCS#1 v1.5
-  decryption for the legacy `crypt`–`crypt4` formats.
+  decryption.
+- [`@noble/ciphers`](https://github.com/paulmillr/noble-ciphers) — audited
+  ChaCha20-Poly1305 implementation for direct `crypt5` decryption.
 
 ## Privacy
 

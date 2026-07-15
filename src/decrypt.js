@@ -5,18 +5,19 @@
  *            happ://crypt4/…  happ://crypt5/…
  *
  *   crypt1–4  decrypt directly in JS via node-forge (RSA PKCS1v15).
- *   crypt5    runs the native liberror-code.so (marker→RSA key, raw RSA-4096,
- *             key derivation, ChaCha20-Poly1305) in-browser via CPU emulation;
- *             see src/emu/. The JS side only applies the m4831f / m4842j
- *             string transforms around the emulated core.
+ *   crypt5    decrypts directly in JS (RSA PKCS1v15 + ChaCha20-Poly1305),
+ *             falling back to liberror-code.so CPU emulation for formats the
+ *             direct implementation does not recognize.
  *
  * Runtime data (served from /public/, fetched on first crypt5 call):
  *   emu/liberror-code.so, emu/unicorn_aarch64.js, emu/unicorn-wrapper.js
- *   data/keytable.json  – { "marker": "base64-PKCS8-key", … }
+ *   data/crypt5-keys.json – direct-decrypt PKCS#8 keys
+ *   data/keytable.json    – native-emulator key strings
  */
 
 import forge from 'node-forge';
 import { getNativeDecryptor } from './emu/decryptor.js';
+import { decryptCrypt5WithFallback } from './crypt5.js';
 
 // ---------------------------------------------------------------------------
 // Embedded PKCS1 RSA private keys for crypt1–crypt4 (base64, no headers)
@@ -36,6 +37,7 @@ const PKCS1_KEYS_B64 = [
 // Runtime data (fetched once on first crypt5 call)
 // ---------------------------------------------------------------------------
 const _forgeKeyCache = new Map();
+let _crypt5KeysPromise = null;
 
 // ---------------------------------------------------------------------------
 // String / byte helpers
@@ -96,7 +98,7 @@ function rsaDecrypt(privateKey, cipherBytes) {
 // ---------------------------------------------------------------------------
 // Crypt5 pipeline
 // ---------------------------------------------------------------------------
-/** 6-block shuffle [1,3,5,0,2,4] (m4831f) applied to the path segment. */
+/** 6-block shuffle [1,3,5,0,2,4] (m4831f) used by the emulator fallback. */
 function m4831f(s) {
   const full = s.length - (s.length % 6);
   let out = '';
@@ -107,14 +109,19 @@ function m4831f(s) {
   return out + s.slice(full);
 }
 
-/**
- * Current Happ crypt5 format. The proprietary RSA + key-derivation + ChaCha
- * stage is implemented by the native lib `liberror-code.so`, which we run
- * in-browser via CPU emulation (see src/emu/). The outer pipeline is plain JS:
- *
- *   URL = base64decode( m4842j( native_c( m4831f(payload) ) ) )
- */
-async function decryptCrypt5(payload) {
+// The PKCS#8 table is separate from the native fallback's obfuscated key strings.
+async function getCrypt5Keys() {
+  if (!_crypt5KeysPromise) {
+    const base = import.meta.env.BASE_URL;
+    _crypt5KeysPromise = fetch(`${base}data/crypt5-keys.json`).then((response) => {
+      if (!response.ok) throw new Error(`could not load crypt5 keys (${response.status})`);
+      return response.json();
+    });
+  }
+  return _crypt5KeysPromise;
+}
+
+async function decryptCrypt5Emulated(payload) {
   const nativeIn = m4831f(payload);
   const decryptor = await getNativeDecryptor();
   const outBytes = decryptor.decrypt(new TextEncoder().encode(nativeIn));
@@ -123,6 +130,10 @@ async function decryptCrypt5(payload) {
   }
   const obfuscated = new TextDecoder().decode(outBytes); // m4842j-obfuscated base64 of the URL
   return new TextDecoder().decode(b64DecodeUrlSafe(swapPairs(obfuscated)));
+}
+
+async function decryptCrypt5(payload) {
+  return decryptCrypt5WithFallback(payload, getCrypt5Keys, decryptCrypt5Emulated);
 }
 
 // ---------------------------------------------------------------------------
